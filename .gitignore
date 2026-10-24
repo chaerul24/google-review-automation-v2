@@ -1,0 +1,17 @@
+# Secrets and account/session data
+.env
+*.pem
+*.key
+*.csv
+
+# Local runtime data
+reviews.db
+reviews.db-*
+chrome_profiles/
+__pycache__/
+.pytest_cache/
+.venv/
+
+# OS/editor artifacts
+.DS_Store
+*.log

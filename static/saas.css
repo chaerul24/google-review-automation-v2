@@ -1,0 +1,25 @@
+:root {
+  --saas-bg: #0b1220;
+  --saas-surface: #111827;
+  --saas-border: #263247;
+  --saas-text: #f8fafc;
+  --saas-muted: #94a3b8;
+  --saas-primary: #818cf8;
+}
+
+body.bg-slate-950 {
+  background: var(--saas-bg) !important;
+  color: var(--saas-text) !important;
+}
+.bg-grid { background-image: radial-gradient(#334155 0.6px, transparent 0.6px) !important; background-size: 24px 24px !important; }
+body [class*="bg-slate-900"], body [class*="bg-slate-950"] { background-color: var(--saas-surface) !important; }
+body [class*="border-slate"] { border-color: var(--saas-border) !important; }
+body [class*="text-white"] { color: var(--saas-text) !important; }
+body [class*="text-slate-300"], body [class*="text-slate-400"], body [class*="text-slate-500"] { color: var(--saas-muted) !important; }
+body input, body textarea, body select { background: #0f172a !important; border-color: var(--saas-border) !important; color: var(--saas-text) !important; }
+body input::placeholder, body textarea::placeholder { color: #64748b !important; }
+body nav.sticky { background: rgba(15,23,42,.94) !important; border-color: var(--saas-border) !important; }
+.saas-card { background: var(--saas-surface); border: 1px solid var(--saas-border); border-radius: 16px; box-shadow: 0 8px 24px rgba(15,23,42,.04); }
+.saas-shadow { box-shadow: 0 8px 24px rgba(15,23,42,.06) !important; }
+.status-dot { width: 7px; height: 7px; border-radius: 999px; display: inline-block; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; } }
