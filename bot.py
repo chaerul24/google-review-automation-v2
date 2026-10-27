@@ -402,17 +402,28 @@ def post_review(
                     pass
 
         verification_url = "https://www.google.com/maps?hl=en"
-        sb = sb_cdp.Chrome(
-            verification_url,
-            headed=True,
-            user_data_dir=str(profile_dir),
-            proxy=PROXY,
-            agent=fp["ua"],
-            window_size=win_size_str,
-            locale_code=fp["locale"],
-            chromium_arg=",".join(chromium_args),
-            disable_features="SigninIntercept,ChromeWhatsNewUI,AccountConsistency",
-        )
+        sb = None
+        for launch_attempt in range(2):
+            try:
+                sb = sb_cdp.Chrome(
+                    verification_url,
+                    headed=True,
+                    user_data_dir=str(profile_dir),
+                    proxy=PROXY,
+                    agent=fp["ua"],
+                    window_size=win_size_str,
+                    locale_code=fp["locale"],
+                    chromium_arg=",".join(chromium_args),
+                    disable_features="SigninIntercept,ChromeWhatsNewUI,AccountConsistency",
+                )
+                break
+            except Exception as launch_exc:
+                if launch_attempt == 0 and ("111" in str(launch_exc) or "Connect call failed" in str(launch_exc)):
+                    log.warning("CDP connect failed on attempt 1 for %s, closing previous processes and retrying: %s", email, launch_exc)
+                    session_manager.force_close_profile_processes(profile_dir)
+                    time.sleep(2.0)
+                else:
+                    raise
         sb.maximize()
         sb.sleep(2)
 
@@ -768,17 +779,28 @@ def delete_own_review_on_maps(email, maps_url, business_name, email_id=None, bus
                 except Exception:
                     pass
 
-        sb = sb_cdp.Chrome(
-            target,
-            headed=True,
-            user_data_dir=str(profile_dir),
-            proxy=PROXY,
-            agent=fp["ua"],
-            window_size=fp.get("res", "1366,768"),
-            locale_code="id-ID",
-            chromium_arg=",".join(chromium_args),
-            disable_features="SigninIntercept,ChromeWhatsNewUI,AccountConsistency",
-        )
+        sb = None
+        for launch_attempt in range(2):
+            try:
+                sb = sb_cdp.Chrome(
+                    target,
+                    headed=True,
+                    user_data_dir=str(profile_dir),
+                    proxy=PROXY,
+                    agent=fp["ua"],
+                    window_size=fp.get("res", "1366,768"),
+                    locale_code="id-ID",
+                    chromium_arg=",".join(chromium_args),
+                    disable_features="SigninIntercept,ChromeWhatsNewUI,AccountConsistency",
+                )
+                break
+            except Exception as launch_exc:
+                if launch_attempt == 0 and ("111" in str(launch_exc) or "Connect call failed" in str(launch_exc)):
+                    log.warning("CDP connect failed on attempt 1 for %s, closing previous processes and retrying: %s", email, launch_exc)
+                    session_manager.force_close_profile_processes(profile_dir)
+                    time.sleep(2.0)
+                else:
+                    raise
         sb.maximize()
         sb.sleep(2)
 

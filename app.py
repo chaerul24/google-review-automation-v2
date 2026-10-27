@@ -2842,6 +2842,8 @@ def dark_mode_delete_comments(business_id):
     })
 
 
+_ACTIVE_DELETE_TASKS = set()
+
 @app.route("/business/<int:business_id>/dark-mode/delete-maps-reviews", methods=["POST"])
 @app.route("/api/businesses/<int:business_id>/dark-mode/delete-maps-reviews", methods=["POST"])
 @login_required
@@ -2850,6 +2852,12 @@ def dark_mode_delete_maps_reviews(business_id):
     biz = db.get_business(business_id)
     if not biz:
         return jsonify({"status": "error", "message": "Target bisnis tidak ditemukan."}), 404
+
+    if business_id in _ACTIVE_DELETE_TASKS:
+        return jsonify({
+            "status": "warning",
+            "message": f"Penghapusan ulasan untuk target {biz['name']} sedang berjalan. Harap tunggu hingga proses selesai.",
+        }), 409
 
     data = request.get_json(silent=True) or request.form or {}
     email_id = data.get("email_id")
@@ -2894,19 +2902,33 @@ def dark_mode_delete_maps_reviews(business_id):
             "message": f"Tidak ada akun bot yang ditemukan di database untuk membersihkan ulasan pada target {biz['name']}."
         }), 400
 
-    def run_async_delete(targets):
-        for idx, row in enumerate(targets):
-            bot.delete_own_review_on_maps(
-                email=row["email"],
-                maps_url=biz["url"],
-                business_name=biz["name"],
-                email_id=row.get("email_id"),
-                business_id=business_id,
-                slot_index=idx % 6,
-            )
-            time.sleep(2)
+    # Deduplicate accounts so each email runs exactly once
+    seen_emails = set()
+    unique_targets = []
+    for r in rows:
+        d = dict(r)
+        em = (d.get("email") or "").strip().lower()
+        if em and em not in seen_emails:
+            seen_emails.add(em)
+            unique_targets.append(d)
+    targets = unique_targets
 
-    targets = [dict(r) for r in rows]
+    def run_async_delete(targs):
+        try:
+            _ACTIVE_DELETE_TASKS.add(business_id)
+            for idx, row in enumerate(targs):
+                bot.delete_own_review_on_maps(
+                    email=row["email"],
+                    maps_url=biz["url"],
+                    business_name=biz["name"],
+                    email_id=row.get("email_id"),
+                    business_id=business_id,
+                    slot_index=idx % 6,
+                )
+                time.sleep(2)
+        finally:
+            _ACTIVE_DELETE_TASKS.discard(business_id)
+
     threading.Thread(target=run_async_delete, args=(targets,), daemon=True).start()
 
     return jsonify({
