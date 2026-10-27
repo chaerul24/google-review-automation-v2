@@ -348,12 +348,19 @@ def post_review(
     profile_dir = session_manager.get_profile_dir(email)
     lock = ProfileLock(profile_dir)
     try:
-        lock.acquire()
+        lock.acquire(force=True)
     except ProfileLockedError as lock_err:
-        log.warning("Profile directory for %s is locked: %s", email, lock_err)
-        db.add_process_log(business_id, f"Gagal mengakses profil browser (sedang digunakan): {lock_err}", email_id, "error")
-        db.update_review_status(email_id, "failed", None, star_rating)
-        return False
+        log.warning("Profile directory for %s is locked: %s. Force closing and retrying...", email, lock_err)
+        db.add_process_log(business_id, f"[{email}] Profil sedang digunakan proses lain. Menutup browser sesi lama dan masuk kembali...", email_id, "warning")
+        session_manager.force_close_profile_processes(profile_dir)
+        time.sleep(1.0)
+        try:
+            lock.acquire(force=True)
+        except Exception as retry_err:
+            log.warning("Re-acquire failed for %s: %s", email, retry_err)
+            db.add_process_log(business_id, f"Gagal mengakses profil browser (sedang digunakan): {retry_err}", email_id, "error")
+            db.update_review_status(email_id, "failed", None, star_rating)
+            return False
 
     fp = get_fingerprint(email)
     iframe_sel = "iframe[name='goog-reviews-write-widget']"
@@ -664,7 +671,7 @@ def inspect_existing_review(email, maps_url, business_name, review_id=None, busi
     profile_dir = session_manager.get_profile_dir(email)
     lock = ProfileLock(profile_dir)
     try:
-        lock.acquire()
+        lock.acquire(force=True)
     except ProfileLockedError as lock_err:
         return {"status": "locked", "message": f"Direktori profil terkunci: {lock_err}"}
 
@@ -726,11 +733,18 @@ def delete_own_review_on_maps(email, maps_url, business_name, email_id=None, bus
     profile_dir = session_manager.get_profile_dir(email)
     lock = ProfileLock(profile_dir)
     try:
-        lock.acquire()
+        lock.acquire(force=True)
     except ProfileLockedError as lock_err:
-        log.warning("Profile directory for %s is locked: %s", email, lock_err)
-        db.add_process_log(business_id, f"Gagal mengakses profil browser (sedang digunakan): {lock_err}", email_id, "error")
-        return {"status": "error", "message": f"Direktori profil terkunci: {lock_err}"}
+        log.warning("Profile directory for %s is locked: %s. Force closing and retrying...", email, lock_err)
+        db.add_process_log(business_id, f"[{email}] Profil sedang digunakan proses lain. Menutup browser sesi lama dan masuk kembali...", email_id, "warning")
+        session_manager.force_close_profile_processes(profile_dir)
+        time.sleep(1.0)
+        try:
+            lock.acquire(force=True)
+        except Exception as retry_err:
+            log.warning("Re-acquire failed for %s: %s", email, retry_err)
+            db.add_process_log(business_id, f"Gagal mengakses profil browser (sedang digunakan): {retry_err}", email_id, "error")
+            return {"status": "error", "message": f"Direktori profil terkunci: {retry_err}"}
 
     fp = get_fingerprint(email)
     sb = None

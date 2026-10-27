@@ -13,6 +13,8 @@ import json
 import logging
 import os
 import re
+import signal
+import subprocess
 import time
 import urllib.parse
 from dataclasses import dataclass, field
@@ -80,15 +82,68 @@ class CookieValidationResult:
         }
 
 
+def force_close_profile_processes(profile_dir: Path | str) -> int:
+    """Terminate any Chromium or background processes currently holding this profile dir,
+    then clean up stale lock files so that new sessions can enter cleanly.
+    """
+    p_dir = Path(profile_dir).resolve()
+    dir_name = p_dir.name
+    killed_count = 0
+
+    # 1. Kill by PID recorded in .session_profile.lock
+    lock_file = p_dir / ".session_profile.lock"
+    if lock_file.exists():
+        try:
+            content = lock_file.read_text(errors="ignore")
+            for line in content.splitlines():
+                if line.startswith("pid="):
+                    pid_str = line.split("=")[1].strip()
+                    if pid_str.isdigit():
+                        pid = int(pid_str)
+                        if pid != os.getpid() and pid > 1:
+                            try:
+                                os.kill(pid, signal.SIGTERM)
+                                killed_count += 1
+                            except OSError:
+                                pass
+        except Exception:
+            pass
+
+    # 2. Kill Chromium processes with matching --user-data-dir
+    if os.name != "nt":
+        try:
+            res = subprocess.run(
+                ["pkill", "-9", "-f", f"user-data-dir=.*{dir_name}"],
+                capture_output=True,
+                timeout=3,
+            )
+            if res.returncode == 0:
+                killed_count += 1
+        except Exception:
+            pass
+
+    # 3. Clean up lock and singleton files
+    time.sleep(0.5)
+    for fname in (".session_profile.lock", "SingletonLock", "SingletonSocket", "SingletonCookie"):
+        f_path = p_dir / fname
+        if f_path.exists() or f_path.is_symlink():
+            try:
+                f_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    return killed_count
+
+
 class ProfileLock:
-    """Non-blocking flock lock on a Chromium profile directory to prevent concurrency."""
+    """Non-blocking flock lock on a Chromium profile directory with auto force-close fallback."""
 
     def __init__(self, profile_dir: str | Path):
         self.profile_dir = Path(profile_dir).resolve()
         self.lock_path = self.profile_dir / ".session_profile.lock"
         self._fd: Any | None = None
 
-    def acquire(self) -> None:
+    def acquire(self, force: bool = True) -> None:
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         self._fd = open(self.lock_path, "a+")
         try:
@@ -104,6 +159,30 @@ class ProfileLock:
                 except Exception:
                     pass
                 self._fd = None
+
+            if force:
+                log.info("Profile '%s' is locked. Force-closing existing Chromium processes and re-acquiring...", self.profile_dir.name)
+                force_close_profile_processes(self.profile_dir)
+                time.sleep(1.0)
+                self._fd = open(self.lock_path, "a+")
+                try:
+                    fcntl.flock(self._fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self._fd.seek(0)
+                    self._fd.truncate()
+                    self._fd.write(f"pid={os.getpid()}\ntime={time.time()}\n")
+                    self._fd.flush()
+                    return
+                except (BlockingIOError, OSError) as retry_exc:
+                    if self._fd is not None:
+                        try:
+                            self._fd.close()
+                        except Exception:
+                            pass
+                        self._fd = None
+                    raise ProfileLockedError(
+                        f"Direktori profil '{self.profile_dir.name}' masih terkunci setelah mencoba menutup proses sebelumnya."
+                    ) from retry_exc
+
             raise ProfileLockedError(
                 f"Direktori profil '{self.profile_dir.name}' sedang digunakan oleh proses lain."
             ) from exc
@@ -134,7 +213,7 @@ class ProfileLock:
             return True
 
     def __enter__(self) -> ProfileLock:
-        self.acquire()
+        self.acquire(force=True)
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
