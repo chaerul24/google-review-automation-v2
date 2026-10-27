@@ -2853,18 +2853,26 @@ def dark_mode_delete_maps_reviews(business_id):
 
     data = request.get_json(silent=True) or request.form or {}
     email_id = data.get("email_id")
+    all_accounts = data.get("all_accounts") or request.args.get("all_accounts")
+    is_all = str(all_accounts).lower() in ("true", "1", "yes", "all") or data.get("scope") == "all"
 
-    # Get accounts that have reviewed or have existing review for this business
+    # Get accounts that have reviewed or all registered accounts
     with db.get_db() as conn:
         if email_id:
             rows = conn.execute(
-                """SELECT r.id as review_id, r.email_id, e.email, r.status
-                   FROM reviews r
-                   JOIN emails e ON r.email_id = e.id
-                   WHERE r.business_id = ? AND r.email_id = ?""",
-                (business_id, int(email_id))
+                """SELECT e.id as email_id, e.email
+                   FROM emails e
+                   WHERE e.id = ?""",
+                (int(email_id),)
+            ).fetchall()
+        elif is_all:
+            rows = conn.execute(
+                """SELECT e.id as email_id, e.email
+                   FROM emails e
+                   ORDER BY e.id ASC"""
             ).fetchall()
         else:
+            # Default: check for reviewed/posted records first
             rows = conn.execute(
                 """SELECT r.id as review_id, r.email_id, e.email, r.status
                    FROM reviews r
@@ -2872,11 +2880,18 @@ def dark_mode_delete_maps_reviews(business_id):
                    WHERE r.business_id = ? AND r.status IN ('reviewed', 'posted')""",
                 (business_id,)
             ).fetchall()
+            # If no 'reviewed' rows found (e.g. DB wiped or pending), fallback to ALL master accounts in emails!
+            if not rows:
+                rows = conn.execute(
+                    """SELECT e.id as email_id, e.email
+                       FROM emails e
+                       ORDER BY e.id ASC"""
+                ).fetchall()
 
     if not rows:
         return jsonify({
             "status": "error",
-            "message": f"Tidak ada ulasan terbit dari akun sendiri yang ditemukan untuk target {biz['name']}."
+            "message": f"Tidak ada akun bot yang ditemukan di database untuk membersihkan ulasan pada target {biz['name']}."
         }), 400
 
     def run_async_delete(targets):
@@ -2885,7 +2900,7 @@ def dark_mode_delete_maps_reviews(business_id):
                 email=row["email"],
                 maps_url=biz["url"],
                 business_name=biz["name"],
-                email_id=row["email_id"],
+                email_id=row.get("email_id"),
                 business_id=business_id,
                 slot_index=idx % 6,
             )
@@ -2897,7 +2912,8 @@ def dark_mode_delete_maps_reviews(business_id):
     return jsonify({
         "status": "ok",
         "message": f"Penghapusan ulasan sendiri di Google Maps untuk {len(targets)} akun sedang diproses secara live via Chromium.",
-        "target_count": len(targets)
+        "target_count": len(targets),
+        "accounts": [t["email"] for t in targets]
     })
 
 

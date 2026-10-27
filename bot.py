@@ -702,6 +702,15 @@ def delete_own_review_on_maps(email, maps_url, business_name, email_id=None, bus
         sb.open(target)
         sb.sleep(5)
 
+        # Dismiss any consent dialog if present
+        for consent_btn in ['button:contains("Accept all")', 'button:contains("I agree")', 'button:contains("Setuju")']:
+            try:
+                if sb.is_element_visible(consent_btn):
+                    sb.click(consent_btn)
+                    sb.sleep(2)
+            except Exception:
+                pass
+
         # Check if login active
         current = sb.get_current_url()
         if "accounts.google.com" in current:
@@ -710,27 +719,57 @@ def delete_own_review_on_maps(email, maps_url, business_name, email_id=None, bus
 
         # Check if "Ulasan Anda" or "Your review" exists on page
         body_text = sb.get_text("body") or ""
-        if "Ulasan Anda" not in body_text and "Your review" not in body_text:
-            # Try clicking the "Ulasan" tab to switch view
+        markers = ("Ulasan Anda", "Your review", "Your rating", "Edit ulasan", "Edit your review")
+        has_review = any(m in body_text for m in markers)
+        if not has_review:
+            # Try clicking the "Ulasan" or "Reviews" tab to switch view
             sb.execute_script("""(() => {
-                const tabs = Array.from(document.querySelectorAll('button[aria-label*="Ulasan"], button[role="tab"]'));
-                const revTab = tabs.find(t => (t.innerText || '').includes('Ulasan') || (t.getAttribute('aria-label') || '').includes('Ulasan'));
+                const tabs = Array.from(document.querySelectorAll('button[aria-label*="Ulasan"], button[aria-label*="Reviews"], button[aria-label*="reviews"], button[role="tab"]'));
+                const revTab = tabs.find(t => {
+                    const txt = ((t.innerText || '') + ' ' + (t.getAttribute('aria-label') || '')).toLowerCase();
+                    return txt.includes('ulasan') || txt.includes('review');
+                });
                 if (revTab) revTab.click();
             })()""")
             sb.sleep(3)
             body_text = sb.get_text("body") or ""
+            has_review = any(m in body_text for m in markers)
 
-        if "Ulasan Anda" not in body_text and "Your review" not in body_text:
-            db.add_process_log(business_id, f"[{email}] Tidak ditemukan ulasan milik akun ini pada target {business_name}.", email_id, "warning")
+        if not has_review:
+            db.add_process_log(business_id, f"[{email}] Tidak ditemukan ulasan milik akun ini pada target {business_name}.", email_id, "info")
             return {"status": "not_found", "message": "Tidak ditemukan ulasan milik akun ini pada target Google Maps."}
 
         # Step 1: Click the action menu button (3 dots) on the user's review
         db.add_process_log(business_id, f"[{email}] Menemukan ulasan sendiri di Google Maps. Membuka menu opsi ulasan...", email_id)
         click_action_res = sb.execute_script("""(() => {
-            const btns = Array.from(document.querySelectorAll('button[aria-label*="Tindakan untuk ulasan"], button[aria-label*="Action for review"]'));
+            // 1. Direct 3-dots button on user's own review
+            const btns = Array.from(document.querySelectorAll(
+                'button[aria-label*="Tindakan untuk ulasan"], ' +
+                'button[aria-label*="Action for review"], ' +
+                'button[aria-label*="Review actions"], ' +
+                'button[aria-label*="Opsi ulasan"], ' +
+                'button[data-tooltip*="Tindakan untuk ulasan"], ' +
+                'button[data-tooltip*="Action for review"]'
+            ));
             if (btns.length > 0) {
                 btns[0].click();
                 return { success: true, aria: btns[0].getAttribute('aria-label') };
+            }
+            // 2. Search container that has "Ulasan Anda" or "Your review"
+            const headings = Array.from(document.querySelectorAll('div, h2, h3, span')).filter(el => {
+                const t = (el.innerText || '').trim();
+                return t === 'Ulasan Anda' || t === 'Your review' || t === 'Your rating';
+            });
+            for (const h of headings) {
+                let parent = h.parentElement;
+                for (let i = 0; i < 5 && parent; i++) {
+                    const btn = parent.querySelector('button[aria-haspopup="true"], button[data-tooltip], button[aria-label]');
+                    if (btn) {
+                        btn.click();
+                        return { success: true, method: 'parent-container' };
+                    }
+                    parent = parent.parentElement;
+                }
             }
             return { success: false };
         })()""")

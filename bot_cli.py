@@ -235,11 +235,13 @@ class ServerClient:
         """Delete all reviews and queue logs for a business in database."""
         return self._request(f"/api/businesses/{business_id}/dark-mode/delete-comments", method="POST")
 
-    def delete_maps_reviews_live(self, business_id: int, email_id: Optional[int] = None) -> Dict[str, Any]:
+    def delete_maps_reviews_live(self, business_id: int, email_id: Optional[int] = None, all_accounts: bool = False) -> Dict[str, Any]:
         """Delete own posted reviews directly on Google Maps via live Chromium bot."""
         payload = {}
         if email_id:
             payload["email_id"] = email_id
+        if all_accounts:
+            payload["all_accounts"] = True
         return self._request(f"/api/businesses/{business_id}/dark-mode/delete-maps-reviews", method="POST", data=payload)
 
 
@@ -954,26 +956,63 @@ def handle_remove_review_menu(client: ServerClient, status_info: Dict[str, Any])
 
     elif sub_choice == "3":
         # Hapus ulasan langsung di Google Maps via Live Chromium CDP
-        if reviewed_count == 0:
-            print(f"\n {C_YELLOW}Tidak terdeteksi ulasan terbit (status 'reviewed') dari akun sendiri untuk target ini.{C_RESET}")
-            input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+        print(f"\n {C_BOLD}{C_CYAN}PILIH CAKUPAN PENGHAPUSAN DI GOOGLE MAPS:{C_RESET}")
+        print(f" {C_YELLOW}[1]{C_RESET} {C_WHITE}🌐  SEMUA AKUN MASTER / TERDAFTAR{C_RESET}    {C_DIM}Setiap akun bot login & bersihkan ulasan sendiri di Maps{C_RESET}")
+        print(f" {C_YELLOW}[2]{C_RESET} {C_WHITE}📑  HANYA AKUN 'REVIEWED' DI DB{C_RESET}      {C_DIM}Hanya akun yang tercatat status ulasannya sukses terbit{C_RESET}")
+        print(f" {C_YELLOW}[3]{C_RESET} {C_WHITE}👤  AKUN TERTENTU (PER EMAIL ID){C_RESET}    {C_DIM}Pilih ID akun email tertentu{C_RESET}")
+        print(f" {C_YELLOW}[0]{C_RESET} {C_DIM}↩   Batal{C_RESET}")
+
+        try:
+            scope_c = input(f"\n {C_GREEN}Pilih cakupan [0-3]: {C_RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
             return
 
-        print(f"\n {C_BOLD}{C_YELLOW}⚠️  PERHATIAN: PROSES PENGHAPUSAN LANGSUNG DI GOOGLE MAPS PUBLIK{C_RESET}")
-        print(f" {C_DIM}Chromium akan login menggunakan cookie akun bot yang pernah mengulas target ini,{C_RESET}")
-        print(f" {C_DIM}membuka profil Maps tempat, mencari ulasan sendiri, dan menekan tombol 'Delete Review'.{C_RESET}")
-        confirm = input(f"\n {C_BOLD}{C_RED}Luncurkan bot Chromium untuk MENGHAPUS {reviewed_count} ulasan di Google Maps? [y/N]: {C_RESET}").strip().lower()
-        if confirm in ("y", "yes"):
-            spin = Spinner("Meluncurkan worker Chromium untuk hapus ulasan di Google Maps...")
-            spin.start()
-            try:
-                res = client.delete_maps_reviews_live(bid)
-                spin.stop(f"\n {C_GREEN}✓ {res.get('message', 'Worker Chromium diluncurkan untuk menghapus ulasan di Google Maps.')}{C_RESET}")
-            except Exception as exc:
-                spin.stop()
-                print(f"\n {C_RED}✖ Gagal meluncurkan: {exc}{C_RESET}")
-        else:
-            print(f" {C_DIM}Dibatalkan.{C_RESET}")
+        if scope_c == "1":
+            confirm = input(f"\n {C_BOLD}{C_RED}Luncurkan bot Chromium untuk SCAN & HAPUS ulasan dari SEMUA akun bot terdaftar di Maps? [y/N]: {C_RESET}").strip().lower()
+            if confirm in ("y", "yes"):
+                spin = Spinner("Meluncurkan worker Chromium untuk SEMUA akun di Google Maps...")
+                spin.start()
+                try:
+                    res = client.delete_maps_reviews_live(bid, all_accounts=True)
+                    spin.stop(f"\n {C_GREEN}✓ {res.get('message', 'Pembersihan ulasan di Google Maps dimulai untuk semua akun.')}{C_RESET}")
+                except Exception as exc:
+                    spin.stop()
+                    print(f"\n {C_RED}✖ Gagal meluncurkan: {exc}{C_RESET}")
+        elif scope_c == "2":
+            if reviewed_count == 0:
+                print(f"\n {C_YELLOW}Tidak ada record ulasan berstatus 'reviewed' di database untuk bisnis ini.{C_RESET}")
+            else:
+                confirm = input(f"\n {C_BOLD}{C_RED}Luncurkan bot Chromium untuk HAPUS {reviewed_count} ulasan terbit di Maps? [y/N]: {C_RESET}").strip().lower()
+                if confirm in ("y", "yes"):
+                    spin = Spinner("Meluncurkan worker Chromium...")
+                    spin.start()
+                    try:
+                        res = client.delete_maps_reviews_live(bid)
+                        spin.stop(f"\n {C_GREEN}✓ {res.get('message')}{C_RESET}")
+                    except Exception as exc:
+                        spin.stop()
+                        print(f"\n {C_RED}✖ Gagal: {exc}{C_RESET}")
+        elif scope_c == "3":
+            all_emails = status_info.get("emails", [])
+            if not all_emails:
+                try:
+                    all_emails = client.get_status().get("emails", [])
+                except Exception:
+                    pass
+            if all_emails:
+                print(f"\n {C_BOLD}{C_CYAN}DAFTAR AKUN BOT TERSEDIA:{C_RESET}")
+                for em in all_emails[:20]:
+                    print(f" {C_BOLD}#{em.get('id')}{C_RESET}: {C_WHITE}{em.get('email')}{C_RESET}")
+            eid_in = input(f"\n {C_GREEN}Masukkan ID Akun Email yang ingin dihapus ulasannya di Maps: {C_RESET}").strip()
+            if eid_in.isdigit():
+                spin = Spinner(f"Meluncurkan penghapusan ulasan untuk Akun ID {eid_in}...")
+                spin.start()
+                try:
+                    res = client.delete_maps_reviews_live(bid, email_id=int(eid_in))
+                    spin.stop(f"\n {C_GREEN}✓ {res.get('message')}{C_RESET}")
+                except Exception as exc:
+                    spin.stop()
+                    print(f"\n {C_RED}✖ Gagal: {exc}{C_RESET}")
         input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
 
 
@@ -1415,6 +1454,7 @@ def main():
     p_rdel.add_argument("--business", "-b", type=int, required=True, help="ID Bisnis target")
     p_rdel.add_argument("--review-id", "-r", type=int, default=None, help="ID Review tertentu (opsional)")
     p_rdel.add_argument("--maps", action="store_true", help="Hapus langsung di Google Maps via Chromium")
+    p_rdel.add_argument("--all-accounts", "-a", action="store_true", help="Hapus ulasan dari SEMUA akun bot di Google Maps")
 
     args = parser.parse_args()
     client = ServerClient(base_url=args.server, api_key=args.key or "")
@@ -1471,7 +1511,7 @@ def main():
             run_task_stream(client, args.business, count=args.slots, star_rating=args.stars)
         elif args.command == "review-del":
             if args.maps:
-                res = client.delete_maps_reviews_live(args.business)
+                res = client.delete_maps_reviews_live(args.business, all_accounts=args.all_accounts)
                 print(f"{C_GREEN}✓ {res.get('message', 'Worker Chromium diluncurkan untuk menghapus ulasan di Google Maps.')}{C_RESET}")
             elif args.review_id:
                 res = client.delete_single_review(args.business, args.review_id)

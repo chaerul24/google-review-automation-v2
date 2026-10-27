@@ -649,22 +649,39 @@ def interactive_loop():
                                 console.print(f"[bold green]✓ Review #{rid_in} berhasil dihapus dari database.[/bold green]")
                     elif sub_c == "3":
                         posted = [r for r in reviews if r.get("status") in ("reviewed", "posted")]
-                        if not posted:
-                            console.print("[yellow]Tidak ada ulasan terbit dari bot untuk bisnis ini.[/yellow]")
-                        elif Confirm.ask(f"[bold red]Luncurkan bot Chromium untuk MENGHAPUS {len(posted)} ulasan langsung di Google Maps?[/bold red]"):
-                            def run_del_bg():
-                                for idx, row in enumerate(posted):
-                                    bot.delete_own_review_on_maps(
-                                        email=row.get("email"),
-                                        maps_url=biz["url"],
-                                        business_name=biz["name"],
-                                        email_id=row.get("email_id"),
-                                        business_id=b_id,
-                                        slot_index=idx % 6,
-                                    )
-                                    time.sleep(2)
-                            threading.Thread(target=run_del_bg, daemon=True).start()
-                            console.print(f"[bold green]✓ Worker Chromium diluncurkan di background untuk menghapus {len(posted)} ulasan di Google Maps.[/bold green]")
+                        with db.get_db() as conn:
+                            all_emails = [dict(r) for r in conn.execute("SELECT id as email_id, email FROM emails ORDER BY id ASC").fetchall()]
+
+                        console.print("\n[bold cyan]Pilih Target Akun di Google Maps:[/bold cyan]")
+                        console.print(f"  [bold yellow][1][/bold yellow] 🌐  SEMUA Akun Master ({len(all_emails)} akun bot login & bersihkan ulasannya)")
+                        console.print(f"  [bold yellow][2][/bold yellow] 📑  Hanya Akun yang Berstatus 'Reviewed' ({len(posted)} ulasan tercatat)")
+                        console.print(f"  [bold yellow][0][/bold yellow] ↩️  Batal")
+                        sc = Prompt.ask("[bold green]Pilih opsi[/bold green]", choices=["0", "1", "2"], default="1")
+
+                        targets_to_clean = []
+                        if sc == "1":
+                            targets_to_clean = all_emails
+                        elif sc == "2":
+                            if not posted:
+                                console.print("[yellow]Tidak ada ulasan berstatus 'reviewed' tercatat untuk bisnis ini.[/yellow]")
+                            else:
+                                targets_to_clean = posted
+
+                        if targets_to_clean:
+                            if Confirm.ask(f"[bold red]Luncurkan bot Chromium untuk MENGHAPUS ulasan di Google Maps untuk {len(targets_to_clean)} akun?[/bold red]"):
+                                def run_del_bg(targs):
+                                    for idx, row in enumerate(targs):
+                                        bot.delete_own_review_on_maps(
+                                            email=row.get("email"),
+                                            maps_url=biz["url"],
+                                            business_name=biz["name"],
+                                            email_id=row.get("email_id"),
+                                            business_id=b_id,
+                                            slot_index=idx % 6,
+                                        )
+                                        time.sleep(2)
+                                threading.Thread(target=run_del_bg, args=(targets_to_clean,), daemon=True).start()
+                                console.print(f"[bold green]✓ Worker Chromium diluncurkan di background untuk memeriksa & menghapus ulasan {len(targets_to_clean)} akun di Google Maps.[/bold green]")
             Prompt.ask("\n[dim]Tekan Enter untuk kembali...[/dim]")
 
 
