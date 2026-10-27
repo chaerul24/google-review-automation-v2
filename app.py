@@ -424,13 +424,13 @@ def api_cli_status():
     businesses = db.get_all_businesses()
     with db.get_db() as conn:
         accounts = conn.execute("""
-            SELECT e.id, e.email, e.flagged, c.status AS cookie_status
+            SELECT e.id, e.email, COALESCE(e.account_name, c.account_name, '') AS account_name, e.flagged, c.status AS cookie_status
             FROM emails e
             LEFT JOIN cookies c ON e.email = c.email
             ORDER BY e.id ASC
         """).fetchall()
         cookies_list = conn.execute("""
-            SELECT c.id, c.email, c.status, c.last_checked_at, c.updated_at, c.error_reason
+            SELECT c.id, c.email, COALESCE(c.account_name, '') AS account_name, c.status, c.last_checked_at, c.updated_at, c.error_reason
             FROM cookies c
             ORDER BY c.id ASC
         """).fetchall()
@@ -455,6 +455,57 @@ def api_cli_status():
         "businesses": [dict(b) for b in businesses],
         "accounts": [dict(a) for a in accounts],
         "cookies": [dict(c) for c in cookies_list],
+    })
+
+
+@app.route("/api/cli/cookies/check-names", methods=["POST"])
+@login_required
+def api_cli_check_cookie_names():
+    """Verify stored cookies live against Google and retrieve real Account Names."""
+    with db.get_db() as conn:
+        cookies = conn.execute("SELECT id, email, cookie_json FROM cookies ORDER BY id ASC").fetchall()
+
+    results = []
+    active_count = 0
+    for row in cookies:
+        cid = row["id"]
+        email = row["email"]
+        c_json = row["cookie_json"]
+
+        live = session_manager.check_google_account_live(c_json, fallback_email=email)
+        acc_name = live.get("account_name") or ""
+        st_val = live.get("status") or "needs_login"
+        reason = live.get("reason") or ""
+        if st_val == "active":
+            active_count += 1
+
+        with db.get_db() as conn:
+            conn.execute(
+                """UPDATE cookies
+                   SET status = ?, account_name = ?, last_checked_at = CURRENT_TIMESTAMP, error_reason = ?
+                   WHERE id = ?""",
+                (st_val, acc_name, reason, cid),
+            )
+            conn.execute(
+                """UPDATE emails
+                   SET account_name = ?, flagged = (CASE WHEN ? = 'active' THEN 0 ELSE flagged END)
+                   WHERE email = ?""",
+                (acc_name, st_val, email),
+            )
+
+        results.append({
+            "id": cid,
+            "email": email,
+            "account_name": acc_name,
+            "status": st_val,
+            "reason": reason,
+        })
+
+    return jsonify({
+        "status": "ok",
+        "checked": len(results),
+        "active_count": active_count,
+        "results": results,
     })
 
 
@@ -2138,9 +2189,18 @@ def add_cookie():
     if not email:
         email = val.detected_email or f"google.session.{int(time.time()) % 10000:04d}@gmail.com"
 
+    # Live check with Google to retrieve real account name and session status
+    live = session_manager.check_google_account_live(cookie_raw, fallback_email=email)
+    account_name = live.get("account_name") or ""
+    session_status = live.get("status") or val.status.value
+
     json_to_save = val.normalized_json or json.dumps(val.sanitized_cookies)
     inserted = db.save_cookie(email, json_to_save)
-    db.update_cookie_session_status(email, val.status.value, val.reason)
+    db.update_cookie_session_status(email, session_status, live.get("reason") or val.reason)
+    if account_name:
+        with db.get_db() as conn:
+            conn.execute("UPDATE cookies SET account_name = ? WHERE email = ?", (account_name, email))
+            conn.execute("UPDATE emails SET account_name = ? WHERE email = ?", (account_name, email))
 
     # Otomatis masukkan ke email pool jika belum ada dan pastikan status aktif
     with db.get_db() as conn:
@@ -2175,9 +2235,18 @@ def api_add_cookie():
     if not email:
         email = val.detected_email or f"google.session.{int(time.time()) % 10000:04d}@gmail.com"
 
+    # Live check with Google to retrieve real account name and session status
+    live = session_manager.check_google_account_live(cookie_raw, fallback_email=email)
+    account_name = live.get("account_name") or ""
+    session_status = live.get("status") or val.status.value
+
     json_to_save = val.normalized_json or json.dumps(val.sanitized_cookies)
     inserted = db.save_cookie(email, json_to_save)
-    db.update_cookie_session_status(email, val.status.value, val.reason)
+    db.update_cookie_session_status(email, session_status, live.get("reason") or val.reason)
+    if account_name:
+        with db.get_db() as conn:
+            conn.execute("UPDATE cookies SET account_name = ? WHERE email = ?", (account_name, email))
+            conn.execute("UPDATE emails SET account_name = ? WHERE email = ?", (account_name, email))
 
     # Detect if another account already uses this exact session token
     core_sig = None
@@ -2214,10 +2283,11 @@ def api_add_cookie():
         "saved": True,
         "is_new": bool(inserted),
         "email": email,
-        "valid": val.is_valid,
+        "account_name": account_name,
+        "valid": live.get("is_valid", val.is_valid),
         "cookie_count": val.cookie_count,
-        "session_status": val.status.value,
-        "reason": val.reason,
+        "session_status": session_status,
+        "reason": live.get("reason") or val.reason,
     }
     if duplicate_email:
         res_data["warning"] = f"Perhatian: Cookie ini memiliki sesi token yang sama dengan '{duplicate_email}'. Untuk menjalankan ulasan independen pada multi-layar, pastikan login dengan akun Google yang berbeda."
@@ -2673,32 +2743,22 @@ def start_bot(business_id):
     # Shuffle ratings and languages independently so assignments are random.
     random.shuffle(star_list)
 
+    # Validasi ketat: Hanya izinkan jika ada akun dengan cookie aktif ('active')
+    with db.get_db() as conn:
+        active_count = conn.execute("SELECT COUNT(*) FROM cookies WHERE status = 'active'").fetchone()[0]
+
+    if active_count == 0:
+        return jsonify({
+            "status": "error",
+            "message": "Tidak dapat menjalankan task: Tidak ada akun dengan status AKTIF. Seluruh akun berstatus 'PERLU LOGIN' atau belum memiliki cookie valid. Harap tambahkan atau perbarui cookie aktif di menu Kelola Cookie."
+        }), 400
+
     created, already_pending = db.create_review_jobs(business_id, star_list, language_list=language_list, allowed_email_ids=allowed_email_ids)
     if created == 0 and already_pending == 0:
-        pool = db.get_all_emails()
-        reviewed_count = db.count_reviewed_for_business(business_id)
-        flagged_count = sum(1 for email in pool if email.get("flagged"))
-        total_pool = len(pool)
-
-        if total_pool == 0:
-            message = "Belum ada akun Google terhubung. Silakan tambahkan cookie di menu 'Kelola Cookie'."
-        elif flagged_count == total_pool:
-            message = (
-                f"Tidak ada akun yang dapat ditugaskan: semua akun ({flagged_count} akun) ditandai sesi kedaluwarsa. "
-                "Silakan perbarui cookie akun di menu 'Kelola Cookie'."
-            )
-        elif reviewed_count >= total_pool:
-            message = (
-                f"Semua akun Google yang terhubung ({total_pool} akun) sudah pernah menyelesaikan ulasan untuk target ini. "
-                "Google Maps membatasi 1 ulasan per akun. "
-                "Silakan tambahkan cookie akun baru di 'Kelola Cookie' atau klik 'Reset Ulasan Target' jika ingin mengulang proses."
-            )
-        else:
-            message = (
-                f"Tidak ada akun baru yang tersedia untuk target ini ({reviewed_count} ulasan selesai dari {total_pool} akun terhubung). "
-                "Silakan tambahkan cookie akun baru di 'Kelola Cookie' atau reset ulasan target."
-            )
-        return jsonify({"status": "error", "message": message})
+        return jsonify({
+            "status": "error",
+            "message": "Tidak ada akun dengan cookie AKTIF yang dapat ditugaskan untuk target ini. Silakan tambahkan cookie akun baru atau reset ulasan target."
+        }), 400
 
     db.add_process_log(
         business_id,

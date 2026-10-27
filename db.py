@@ -107,11 +107,24 @@ def init_db():
             );
         """)
     migrate_add_cookie_session_columns()
+    migrate_add_account_name()
     migrate_add_screen_count()
     migrate_add_gemini_config()
     init_templates_and_campaigns_db()
     ensure_all_businesses_have_config()
     sync_active_cookies_to_emails()
+
+
+def migrate_add_account_name():
+    """Ensure account_name column exists in cookies and emails tables."""
+    with get_db() as conn:
+        cols_c = [r["name"] for r in conn.execute("PRAGMA table_info(cookies)").fetchall()]
+        if "account_name" not in cols_c:
+            conn.execute("ALTER TABLE cookies ADD COLUMN account_name TEXT DEFAULT ''")
+
+        cols_e = [r["name"] for r in conn.execute("PRAGMA table_info(emails)").fetchall()]
+        if "account_name" not in cols_e:
+            conn.execute("ALTER TABLE emails ADD COLUMN account_name TEXT DEFAULT ''")
 
 
 def sync_active_cookies_to_emails():
@@ -425,19 +438,18 @@ def get_review_for_business(review_id, business_id):
 def get_pending_reviews(business_id):
     """Emails assigned to this business run that haven't been posted yet.
     Excludes emails that have been flagged after too many failures.
-    Prioritizes accounts with active cookies.
+    Strictly limited to accounts with active cookies ('active').
     """
     with get_db() as conn:
         rows = conn.execute(
-            """SELECT r.*, e.email, e.password, e.totp_secret, c.status AS cookie_status
+            """SELECT r.*, e.email, e.password, e.totp_secret, COALESCE(c.account_name, e.account_name, '') AS account_name, c.status AS cookie_status
                FROM reviews r
                JOIN emails e ON e.id = r.email_id
-               LEFT JOIN cookies c ON e.email = c.email
+               JOIN cookies c ON e.email = c.email
                WHERE r.business_id = ? AND r.status = 'pending'
                  AND COALESCE(e.flagged, 0) = 0
-               ORDER BY 
-                   (CASE WHEN c.status = 'active' THEN 0 ELSE 1 END) ASC,
-                   r.created_at ASC""",
+                 AND c.status = 'active'
+               ORDER BY r.created_at ASC""",
             (business_id,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -548,13 +560,13 @@ def create_review_jobs(business_id, star_list, type_list=None, language_list=Non
 
             if r["cookie_status"] == "active":
                 active_cookie_ids.append(r["id"])
-            else:
-                other_ids.append(r["id"])
+            # Hanya akun dengan cookie aktif ('active') yang diikutsertakan ke dalam antrean task
 
-        # Randomize selection: shuffle active accounts and other accounts so assignments are random
+        # Acak urutan akun aktif
         random.shuffle(active_cookie_ids)
-        random.shuffle(other_ids)
-        available = active_cookie_ids + other_ids
+        available = active_cookie_ids
+        if not available:
+            return 0, len(pending_email_ids)
 
         count = 0
         for idx, (star, rtype, lang) in enumerate(zip(star_list, effective_types, effective_langs)):

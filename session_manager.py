@@ -841,3 +841,140 @@ class SessionManager:
 
         log.info("Session verified successfully for %s on %s", account_email, clean_target)
         return True, SessionStatus.ACTIVE, detail
+
+
+def check_google_account_live(cookie_json_or_list: Any, fallback_email: str = "") -> dict:
+    """Inspect cookie live against Google to verify session and retrieve real Account Name.
+    Returns:
+        {
+            "status": "active" | "needs_login" | "invalid",
+            "is_valid": bool,
+            "account_name": str,
+            "email": str,
+            "reason": str
+        }
+    """
+    import ssl
+    import urllib.error
+    import urllib.request
+
+    val = validate_cookie_payload(cookie_json_or_list)
+    email = val.detected_email or fallback_email
+    if not val.is_valid and val.status == SessionStatus.INVALID:
+        return {
+            "status": SessionStatus.INVALID.value,
+            "is_valid": False,
+            "account_name": "",
+            "email": email,
+            "reason": val.reason,
+        }
+
+    # Extract valid cookie tokens
+    cookie_parts = []
+    has_sid = False
+    for ck in val.sanitized_cookies:
+        name = ck.get("name") or ""
+        value = ck.get("value") or ""
+        if name in ("SID", "__Secure-1PSID", "SAPISID", "SSID", "HSID"):
+            has_sid = True
+        if name and value:
+            cookie_parts.append(f"{name}={value}")
+
+    if not has_sid or not cookie_parts:
+        return {
+            "status": SessionStatus.NEEDS_LOGIN.value,
+            "is_valid": False,
+            "account_name": "",
+            "email": email,
+            "reason": "Token sesi login Google (SID / SAPISID) tidak ditemukan dalam cookie.",
+        }
+
+    cookie_header = "; ".join(cookie_parts)
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    opener = urllib.request.build_opener(NoRedirect)
+    target_url = "https://myaccount.google.com/?hl=id"
+    req = urllib.request.Request(
+        target_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Cookie": cookie_header,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        },
+    )
+
+    try:
+        resp = opener.open(req, timeout=9)
+        final_url = resp.geturl()
+        html = resp.read().decode("utf-8", errors="ignore")
+
+        if "accounts.google.com" in final_url or "signin" in final_url or "/intro" in final_url:
+            return {
+                "status": SessionStatus.NEEDS_LOGIN.value,
+                "is_valid": False,
+                "account_name": "",
+                "email": email,
+                "reason": "Sesi Google telah kedaluwarsa atau perlu login ulang.",
+            }
+
+        # Session is ACTIVE! Extract Google Account Name
+        account_name = ""
+        m1 = re.search(r'aria-label="(?:Akun Google|Google Account):\s*([^"\n\r\(]+)', html)
+        if m1:
+            account_name = m1.group(1).strip()
+        else:
+            m2 = re.search(r'data-name="([^"]+)"', html)
+            if m2:
+                account_name = m2.group(1).strip()
+            else:
+                m3 = re.search(r'\[\s*"([A-Z][a-zA-Z0-9\s]{2,40})"\s*,\s*"[^"]+@gmail\.com"', html)
+                if m3:
+                    account_name = m3.group(1).strip()
+
+        if not account_name and email:
+            uname = email.split("@")[0]
+            clean_uname = re.sub(r'[\._0-9]+', ' ', uname).strip()
+            if clean_uname:
+                account_name = clean_uname.title()
+
+        return {
+            "status": SessionStatus.ACTIVE.value,
+            "is_valid": True,
+            "account_name": account_name,
+            "email": email,
+            "reason": "Sesi cookie Google aktif dan terverifikasi.",
+        }
+
+    except urllib.error.HTTPError as err:
+        loc = err.headers.get("Location") or ""
+        if "accounts.google.com" in loc or "signin" in loc or "intro" in loc or err.code in (301, 302, 303, 307):
+            return {
+                "status": SessionStatus.NEEDS_LOGIN.value,
+                "is_valid": False,
+                "account_name": "",
+                "email": email,
+                "reason": "Sesi Google dialihkan ke login (Perlu Login).",
+            }
+        return {
+            "status": SessionStatus.INVALID.value,
+            "is_valid": False,
+            "account_name": "",
+            "email": email,
+            "reason": f"HTTP {err.code}: {err.reason}",
+        }
+    except Exception as exc:
+        return {
+            "status": SessionStatus.INVALID.value,
+            "is_valid": False,
+            "account_name": "",
+            "email": email,
+            "reason": f"Gagal verifikasi sesi Google: {exc}",
+        }

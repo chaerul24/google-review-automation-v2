@@ -184,6 +184,10 @@ class ServerClient:
         """Test a cookie session validity against Google."""
         return self._request(f"/api/cookies/{cookie_id}/test", method="POST")
 
+    def check_account_names(self) -> Dict[str, Any]:
+        """Trigger server-side verification of Google account names and live session statuses."""
+        return self._request("/api/cli/cookies/check-names", method="POST")
+
     def get_status(self) -> Dict[str, Any]:
         return self._request("/api/cli/status")
 
@@ -582,13 +586,13 @@ def print_accounts(accounts: List[Dict[str, Any]]):
         print(f"  {C_YELLOW}Belum ada akun Google terdaftar.{C_RESET}")
         return
 
-    print(f" {C_BOLD}{'ID':<6} {'AKUN EMAIL GOOGLE':<34} {'STATUS SESI':<20} {'FLAGGED'}{C_RESET}")
-    print(" " + "─" * 70)
+    print(f" {C_BOLD}{'ID':<5} {'NAMA AKUN':<22} {'EMAIL AKUN':<32} {'STATUS SESI':<16}{C_RESET}")
+    print(" " + "─" * 78)
     for a in accounts:
         aid = a.get("id")
-        email = a.get("email", "")[:32]
+        name = (a.get("account_name") or "-").strip()[:20]
+        email = a.get("email", "")[:30]
         c_status = a.get("cookie_status") or "no_cookie"
-        flag = "Flagged" if a.get("flagged") else "Normal"
 
         if c_status == "active":
             st_color = f"{C_GREEN}● AKTIF{C_RESET}"
@@ -599,9 +603,8 @@ def print_accounts(accounts: List[Dict[str, Any]]):
         else:
             st_color = f"{C_DIM}- TIDAK ADA -{C_RESET}"
 
-        fl_color = f"{C_RED}{flag}{C_RESET}" if flag == "Flagged" else f"{C_GREEN}{flag}{C_RESET}"
-        st_pad = pad_to_display_width(st_color, 18)
-        print(f" {C_YELLOW}{aid:<6}{C_RESET} {C_WHITE}{email:<34}{C_RESET} {st_pad} {fl_color}")
+        st_pad = pad_to_display_width(st_color, 16)
+        print(f" {C_YELLOW}{aid:<5}{C_RESET} {C_WHITE}{name:<22}{C_RESET} {C_CYAN}{email:<32}{C_RESET} {st_pad}")
     print()
 
 
@@ -612,15 +615,13 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
         print(f"  {C_YELLOW}Belum ada cookie Google terdaftar di database.{C_RESET}")
         return
 
-    print(f" {C_BOLD}{'ID':<6} {'AKUN EMAIL GOOGLE':<34} {'STATUS SESI':<20} {'PEMBARUAN TERAKHIR'}{C_RESET}")
+    print(f" {C_BOLD}{'ID':<5} {'NAMA AKUN GOOGLE':<24} {'EMAIL AKUN':<32} {'STATUS SESI':<16}{C_RESET}")
     print(" " + "─" * 78)
     for c in cookies:
         cid = c.get("id")
-        email = c.get("email", "")[:32]
+        name = (c.get("account_name") or "-").strip()[:22]
+        email = c.get("email", "")[:30]
         c_status = (c.get("status") or "unknown").lower()
-        upd = c.get("updated_at") or c.get("last_checked_at") or "-"
-        if len(str(upd)) > 19:
-            upd = str(upd)[:19]
 
         if c_status == "active":
             st_color = f"{C_GREEN}● AKTIF{C_RESET}"
@@ -631,8 +632,8 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
         else:
             st_color = f"{C_DIM}- TIDAK AKTIF -{C_RESET}"
 
-        st_pad = pad_to_display_width(st_color, 18)
-        print(f" {C_YELLOW}{cid:<6}{C_RESET} {C_WHITE}{email:<34}{C_RESET} {st_pad} {C_DIM}{upd}{C_RESET}")
+        st_pad = pad_to_display_width(st_color, 16)
+        print(f" {C_YELLOW}{cid:<5}{C_RESET} {C_WHITE}{name:<24}{C_RESET} {C_CYAN}{email:<32}{C_RESET} {st_pad}")
     print()
 
 
@@ -658,12 +659,13 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
         print(f" {C_BOLD}{C_CYAN}─── KELOLA COOKIE (AKUN ADMIN) ────────────────────────────────────────{C_RESET}")
         print(f"  {C_YELLOW}[1]{C_RESET} {C_WHITE}➕ Tambah Cookie Baru (Paste JSON atau File .json){C_RESET}")
         print(f"  {C_YELLOW}[2]{C_RESET} {C_WHITE}🗑️  Hapus Cookie (Berdasarkan ID atau Email){C_RESET}")
-        print(f"  {C_YELLOW}[3]{C_RESET} {C_WHITE}🔄 Uji Validitas Cookie (Test Sesi Google){C_RESET}")
+        print(f"  {C_YELLOW}[3]{C_RESET} {C_WHITE}🔍 Cek Nama Akun & Status Sesi (Live Check Google){C_RESET}")
+        print(f"  {C_YELLOW}[4]{C_RESET} {C_WHITE}🔄 Uji Validitas Cookie Tunggal (Test Sesi ID){C_RESET}")
         print(f"  {C_YELLOW}[0]{C_RESET} {C_DIM}↩️  Kembali ke Menu Utama{C_RESET}")
         print()
 
         try:
-            c_opt = input(f" {C_GREEN}Pilih aksi cookie [0-3] (default 0): {C_RESET}").strip() or "0"
+            c_opt = input(f" {C_GREEN}Pilih aksi cookie [0-4] (default 0): {C_RESET}").strip() or "0"
         except (KeyboardInterrupt, EOFError):
             break
 
@@ -711,7 +713,10 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
                 detected = res.get("email") or email_in
                 st_val = res.get("session_status", "unknown")
                 c_cnt = res.get("cookie_count", 0)
+                acc_name = res.get("account_name", "")
                 spin.stop(f" {C_BOLD}{C_GREEN}✓ Cookie berhasil disimpan untuk akun '{detected}'!{C_RESET}")
+                if acc_name:
+                    print(f"   {C_DIM}Nama Profil Akun: {C_WHITE}{acc_name}{C_RESET}")
                 print(f"   {C_DIM}Status Sesi: {C_GREEN if st_val == 'active' else C_YELLOW}{st_val.upper()}{C_RESET} │ {C_DIM}Jumlah Cookie: {C_WHITE}{c_cnt}{C_RESET}")
                 if res.get("warning"):
                     print(f"   {C_YELLOW}⚠️  {res.get('warning')}{C_RESET}")
@@ -755,6 +760,26 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
                     time.sleep(2)
 
         elif c_opt == "3":
+            print(f"\n {C_BOLD}{C_CYAN}─── CEK NAMA AKUN & VALIDITAS SESI GOOGLE ─────────────────────────────{C_RESET}")
+            spin = Spinner("Memverifikasi sesi & memeriksa nama profil akun ke Google...")
+            spin.start()
+            try:
+                res = client.check_account_names()
+                chk_cnt = res.get("checked", 0)
+                act_cnt = res.get("active_count", 0)
+                spin.stop(f" {C_BOLD}{C_GREEN}✓ Pemeriksaan selesai! {chk_cnt} akun diperiksa, {act_cnt} akun AKTIF.{C_RESET}")
+                time.sleep(1.2)
+                try:
+                    status_info = client.get_status()
+                    cookies = status_info.get("cookies", [])
+                except Exception:
+                    pass
+            except Exception as e:
+                spin.stop()
+                print(f" {C_BOLD}{C_RED}✖ Gagal memeriksa nama akun: {e}{C_RESET}")
+                time.sleep(2)
+
+        elif c_opt == "4":
             print(f"\n {C_BOLD}{C_CYAN}─── UJI VALIDITAS COOKIE ──────────────────────────────────────────────{C_RESET}")
             test_in = input(f" {C_GREEN}Masukkan ID Cookie yang ingin diuji: {C_RESET}").strip()
             if not test_in.isdigit():
@@ -934,6 +959,25 @@ def interactive_menu(client: ServerClient):
             break
 
         elif choice == "1":
+            spin = Spinner("Memeriksa ketersediaan akun Google aktif...")
+            spin.start()
+            try:
+                cur_status = client.get_status()
+                active_cnt = cur_status.get("active_cookies", 0)
+                spin.stop()
+            except Exception:
+                spin.stop()
+                active_cnt = status_info.get("active_cookies", 0)
+
+            if active_cnt == 0:
+                print(f"\n {C_BOLD}{C_RED}✖ Tidak dapat menjalankan task: Tidak ada akun dengan status AKTIF.{C_RESET}")
+                print(f"   {C_YELLOW}Semua akun saat ini berstatus 'PERLU LOGIN' atau belum memiliki cookie valid.{C_RESET}")
+                print(f"   {C_DIM}Silakan periksa atau tambahkan cookie aktif terlebih dahulu di menu [4] Kelola Cookie.{C_RESET}")
+                input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+                continue
+
+            print(f" {C_BOLD}{C_GREEN}✓ Terdeteksi {active_cnt} akun dengan sesi AKTIF siap menjalankan ulasan.{C_RESET}")
+
             businesses = status_info.get("businesses", [])
             print_businesses(businesses)
             if not businesses:
