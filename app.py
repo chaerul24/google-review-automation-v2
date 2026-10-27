@@ -261,7 +261,7 @@ def inject_security_context():
 
 @app.before_request
 def protect_csrf():
-    if request.path in {"/login", "/api/login", "/logout", "/api/logout", "/api/csrf-token", "/api/cli/login"} or request.path.startswith("/api/vm/") or request.path.startswith("/download/"):
+    if request.path in {"/login", "/api/login", "/logout", "/api/logout", "/api/csrf-token", "/api/cli/login", "/api/cli/register"} or request.path.startswith("/api/vm/") or request.path.startswith("/download/"):
         return
     api_key = request.headers.get("X-API-Key")
     expected_key = os.environ.get("APP_PASSWORD", "")
@@ -322,19 +322,32 @@ def api_cli_login():
     expected_pass = os.environ.get("APP_PASSWORD", "").strip()
 
     pass_ok = False
-    if expected_pass and hmac.compare_digest(password, expected_pass):
-        pass_ok = True
-    elif check_password_hash(_PASSWORD_HASH, password):
-        pass_ok = True
+    role = "user"
 
-    user_ok = (username.lower() == expected_user.lower()) or (username.lower() == "admin")
+    # 1. Periksa akun terdaftar di database
+    db.init_db()
+    user_record = db.get_user_by_username(username)
+    if user_record and check_password_hash(user_record["password_hash"], password):
+        pass_ok = True
+        role = user_record.get("role", "user")
+    else:
+        # 2. Periksa akun default/sistem admin
+        user_ok = (username.lower() == expected_user.lower()) or (username.lower() == "admin")
+        if user_ok:
+            if expected_pass and hmac.compare_digest(password, expected_pass):
+                pass_ok = True
+                role = "administrator"
+            elif check_password_hash(_PASSWORD_HASH, password):
+                pass_ok = True
+                role = "administrator"
 
-    if user_ok and pass_ok:
+    if pass_ok:
         _audit(username, "cli_login", "terminal", "success")
         return jsonify({
             "status": "ok",
             "authenticated": True,
             "username": username,
+            "role": role,
             "api_key": expected_pass,
             "message": f"Login berhasil! Selamat datang, {username}."
         })
@@ -345,6 +358,62 @@ def api_cli_login():
         "authenticated": False,
         "message": "Username atau password salah."
     }), 401
+
+
+@app.route("/api/cli/register", methods=["POST"])
+def api_cli_register():
+    """CLI user registration endpoint."""
+    data = request.get_json(silent=True) or request.form or {}
+    username = (data.get("username") or "").strip()
+    password = (data.get("password") or "").strip()
+
+    if not username or len(username) < 3:
+        return jsonify({
+            "status": "error",
+            "message": "Username minimal 3 karakter."
+        }), 400
+
+    if not username.replace("_", "").isalnum():
+        return jsonify({
+            "status": "error",
+            "message": "Username hanya boleh huruf, angka, dan underscore (_)."
+        }), 400
+
+    if not password or len(password) < 4:
+        return jsonify({
+            "status": "error",
+            "message": "Password minimal 4 karakter."
+        }), 400
+
+    expected_user = os.environ.get("APP_USERNAME", "admin").strip()
+    if username.lower() in {"admin", expected_user.lower()}:
+        return jsonify({
+            "status": "error",
+            "message": f"Username '{username}' adalah akun admin sistem yang sudah terdaftar."
+        }), 400
+
+    db.init_db()
+    existing = db.get_user_by_username(username)
+    if existing:
+        return jsonify({
+            "status": "error",
+            "message": f"Username '{username}' sudah terdaftar. Silakan pilih username lain atau login."
+        }), 400
+
+    hashed = generate_password_hash(password)
+    ok = db.create_user(username, hashed, role="user")
+    if not ok:
+        return jsonify({
+            "status": "error",
+            "message": "Gagal menyimpan akun ke database."
+        }), 500
+
+    _audit(username, "cli_register", "terminal", "success", "User registered via CLI")
+    return jsonify({
+        "status": "ok",
+        "message": f"Pendaftaran berhasil! Akun '{username}' siap digunakan.",
+        "username": username
+    })
 
 
 @app.route("/api/cli/status")

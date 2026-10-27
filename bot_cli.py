@@ -88,6 +88,37 @@ class ServerClient:
         except urllib.error.URLError as err:
             raise ConnectionError(f"Tidak dapat terhubung ke server {self.base_url}: {err.reason}")
 
+    def register(self, username: str, password: str) -> Dict[str, Any]:
+        """Register a new user account on the AutoBotix server."""
+        url = f"{self.base_url}/api/cli/register"
+        payload = json.dumps({"username": username, "password": password}).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "User-Agent": "AutoBotix-Windows-CLI/1.0",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if data.get("status") == "ok":
+                    return data
+                raise RuntimeError(data.get("message", "Registrasi gagal."))
+        except urllib.error.HTTPError as err:
+            err_body = err.read().decode("utf-8", errors="replace")
+            try:
+                err_data = json.loads(err_body)
+                msg = err_data.get("message") or err_data.get("error") or str(err)
+            except Exception:
+                msg = f"HTTP {err.code}: {err.reason}"
+            raise RuntimeError(msg)
+        except urllib.error.URLError as err:
+            raise ConnectionError(f"Tidak dapat terhubung ke server {self.base_url}: {err.reason}")
+
     def _request(self, endpoint: str, method: str = "GET", data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         url = f"{self.base_url}{endpoint}"
         headers = {
@@ -257,22 +288,14 @@ def print_banner(client: ServerClient, status_info: Optional[Dict[str, Any]] = N
     print(f" ╚══════════════════════════════════════════════════════════════════════╝")
 
 
-def prompt_login(client: ServerClient, default_user: str = "admin") -> bool:
-    """Prompt user for username and password with masked input before accessing task menu."""
+def _do_login(client: ServerClient, default_user: str = "admin") -> bool:
+    """Handle login input and verification."""
     import getpass
 
-    os.system("cls" if os.name == "nt" else "clear")
     print()
-    print_google_maps_logo("                  ")
-    print()
-    print(f" ╔══════════════════════════════════════════════════════════════════════╗")
-    print(f" ║ {C_BOLD}{C_YELLOW}                   AUTENTIKASI PENGGUNA (LOGIN)                       {C_RESET}║")
-    print(f" ║ {C_DIM}           AutoBotix Review Automation • Client v2.0                  {C_RESET}║")
-    print(f" ╚══════════════════════════════════════════════════════════════════════╝")
-    print(f" {C_DIM}Host Server Target: {C_GREEN}{client.base_url}{C_RESET}")
-
+    print(f" {C_BOLD}{C_CYAN}─── MASUK (LOGIN) ─────────────────────────────────────────────────────{C_RESET}")
     attempts = 0
-    max_attempts = 5
+    max_attempts = 4
     while attempts < max_attempts:
         attempts += 1
         try:
@@ -303,8 +326,8 @@ def prompt_login(client: ServerClient, default_user: str = "admin") -> bool:
                 raise err
 
         except (KeyboardInterrupt, EOFError):
-            print(f"\n\n {C_YELLOW}Login dibatalkan oleh pengguna. Keluar.{C_RESET}")
-            sys.exit(0)
+            print(f"\n {C_YELLOW}Kembali ke menu autentikasi.{C_RESET}")
+            return False
         except RuntimeError as err:
             print(f" {C_BOLD}{C_RED}✖ {err}{C_RESET}")
             if attempts < max_attempts:
@@ -312,15 +335,124 @@ def prompt_login(client: ServerClient, default_user: str = "admin") -> bool:
         except ConnectionError as err:
             print(f" {C_BOLD}{C_RED}✖ {err}{C_RESET}")
             print(f" {C_YELLOW}Pastikan server AutoBotix aktif di {client.base_url}.{C_RESET}")
-            try:
-                retry = input(f"\n Coba lagi? [Y/n]: ").strip().lower()
-                if retry in ("n", "no"):
-                    sys.exit(1)
-            except (KeyboardInterrupt, EOFError):
-                sys.exit(0)
+            return False
 
-    print(f"\n {C_RED}✖ Terlalu banyak percobaan gagal. Akses ditolak.{C_RESET}")
-    sys.exit(1)
+    print(f"\n {C_RED}✖ Terlalu banyak percobaan gagal. Kembali ke menu.{C_RESET}")
+    time.sleep(1.5)
+    return False
+
+
+def _do_register(client: ServerClient) -> bool:
+    """Handle new user registration and auto-login."""
+    import getpass
+
+    print()
+    print(f" {C_BOLD}{C_CYAN}─── DAFTAR AKUN BARU (REGISTER) ───────────────────────────────────────{C_RESET}")
+    try:
+        username = input(f"\n {C_CYAN}Username Baru (min 3 huruf/angka): {C_RESET}").strip()
+        if not username:
+            print(f" {C_YELLOW}Registrasi dibatalkan.{C_RESET}")
+            return False
+        if len(username) < 3:
+            print(f" {C_RED}✖ Username minimal 3 karakter.{C_RESET}")
+            time.sleep(1.5)
+            return False
+        if not username.replace("_", "").isalnum():
+            print(f" {C_RED}✖ Username hanya boleh huruf, angka, dan underscore (_).{C_RESET}")
+            time.sleep(1.5)
+            return False
+
+        if sys.stdin.isatty():
+            try:
+                password = getpass.getpass(f" {C_CYAN}Password (min 4 karakter): {C_RESET}").strip()
+                confirm = getpass.getpass(f" {C_CYAN}Konfirmasi Password: {C_RESET}").strip()
+            except Exception:
+                password = input(f" {C_CYAN}Password (min 4 karakter): {C_RESET}").strip()
+                confirm = input(f" {C_CYAN}Konfirmasi Password: {C_RESET}").strip()
+        else:
+            password = input(f" {C_CYAN}Password (min 4 karakter): {C_RESET}").strip()
+            confirm = input(f" {C_CYAN}Konfirmasi Password: {C_RESET}").strip()
+
+        if len(password) < 4:
+            print(f" {C_RED}✖ Password minimal 4 karakter.{C_RESET}")
+            time.sleep(1.5)
+            return False
+
+        if password != confirm:
+            print(f" {C_RED}✖ Konfirmasi password tidak cocok!{C_RESET}")
+            time.sleep(1.5)
+            return False
+
+        spin = Spinner(f"Mendaftarkan akun '{username}' ke server...")
+        spin.start()
+        try:
+            reg_res = client.register(username, password)
+            spin.stop(f" {C_BOLD}{C_GREEN}✓ {reg_res.get('message', 'Pendaftaran berhasil!')}{C_RESET}")
+        except Exception as err:
+            spin.stop()
+            print(f" {C_BOLD}{C_RED}✖ Gagal registrasi: {err}{C_RESET}")
+            time.sleep(2)
+            return False
+
+        # Masuk otomatis setelah berhasil registrasi
+        auto_spin = Spinner(f"Masuk otomatis dengan akun '{username}'...")
+        auto_spin.start()
+        try:
+            client.login(username, password)
+            auto_spin.stop(f" {C_BOLD}{C_GREEN}✓ Login otomatis berhasil! Masuk ke sistem...{C_RESET}")
+            time.sleep(0.8)
+            return True
+        except Exception as e:
+            auto_spin.stop()
+            print(f" {C_YELLOW}Akun berhasil dibuat. Silakan login manual.{C_RESET}")
+            time.sleep(1.5)
+            return False
+
+    except (KeyboardInterrupt, EOFError):
+        print(f"\n {C_YELLOW}Registrasi dibatalkan.{C_RESET}")
+        return False
+
+
+def prompt_auth(client: ServerClient, default_user: str = "admin") -> bool:
+    """Display Authentication Menu (Login / Register / Exit) before task menu."""
+    while True:
+        os.system("cls" if os.name == "nt" else "clear")
+        print()
+        print_google_maps_logo("                  ")
+        print(f"               {C_DIM}« Native Chromium • Zero-VM Architecture »{C_RESET}")
+        print()
+        print(f" {C_DIM}Host Server Target: {C_GREEN}{client.base_url}{C_RESET}")
+        print()
+        print(f" {C_BOLD}{C_CYAN}[1]{C_RESET} {C_WHITE}Masuk (Login){C_RESET}")
+        print(f" {C_BOLD}{C_CYAN}[2]{C_RESET} {C_WHITE}Daftar Akun Baru (Register){C_RESET}")
+        print(f" {C_BOLD}{C_YELLOW}[0]{C_RESET} {C_DIM}Keluar (Exit){C_RESET}")
+        print()
+
+        try:
+            choice = input(f" {C_GREEN}Pilih menu autentikasi [1]: {C_RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n\n {C_YELLOW}Keluar dari program.{C_RESET}")
+            sys.exit(0)
+
+        if not choice:
+            choice = "1"
+
+        if choice == "1":
+            if _do_login(client, default_user):
+                return True
+        elif choice == "2":
+            if _do_register(client):
+                return True
+        elif choice == "0":
+            print(f"\n {C_YELLOW}Terima kasih. Program selesai.{C_RESET}")
+            sys.exit(0)
+        else:
+            print(f" {C_RED}Pilihan tidak valid. Masukkan 1, 2, atau 0.{C_RESET}")
+            time.sleep(1)
+
+
+# Alias untuk kompatibilitas
+prompt_login = prompt_auth
 
 
 def print_businesses(businesses: List[Dict[str, Any]]):

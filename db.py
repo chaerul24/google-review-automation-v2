@@ -5,6 +5,7 @@ import sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta
 from contextlib import contextmanager
+from typing import Any, Dict, List, Optional
 
 DB_PATH = "reviews.db"
 
@@ -27,6 +28,14 @@ def get_db():
 def init_db():
     with get_db() as conn:
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                password_hash TEXT NOT NULL,
+                role TEXT DEFAULT 'user',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS businesses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -1324,4 +1333,42 @@ def get_worker_system_status():
         "total_reviewed_today": total_reviewed_today,
         "total_failed_today": total_failed_today,
     }
+
+
+def create_user(username: str, password_hash: str, role: str = "user") -> bool:
+    """Create a new registered user in the database."""
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+                (username.strip(), password_hash, role),
+            )
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    except Exception as e:
+        print(f"Error creating user: {e}")
+        return False
+
+
+def get_user_by_username(username: str) -> Optional[dict]:
+    """Retrieve user record by username (case-insensitive)."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, username, password_hash, role, created_at FROM users WHERE username = ? COLLATE NOCASE",
+            (username.strip(),),
+        ).fetchone()
+        if row:
+            return dict(row)
+        return None
+
+
+def get_all_users() -> list:
+    """Retrieve all registered users without exposing password hashes."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, username, role, created_at FROM users ORDER BY id ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
 
