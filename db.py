@@ -355,14 +355,25 @@ def get_analytics_summary():
 
         # 7-day trend
         trend_rows = conn.execute(
-            "SELECT DATE(COALESCE(reviewed_at, created_at)) as day, COUNT(*) as count "
-            "FROM reviews WHERE status = 'reviewed' "
-            "GROUP BY day ORDER BY day DESC LIMIT 7"
+            """SELECT DATE(COALESCE(reviewed_at, created_at)) as day,
+                      SUM(CASE WHEN status = 'reviewed' THEN 1 ELSE 0 END) as reviewed,
+                      SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending
+               FROM reviews
+               GROUP BY day ORDER BY day DESC LIMIT 14"""
         ).fetchall()
-        daily_trends = [{"day": r["day"], "count": r["count"]} for r in reversed(trend_rows)]
-        if not daily_trends:
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            daily_trends = [{"day": today_str, "count": 0}]
+        now = datetime.now()
+        day_map = {r["day"]: {"reviewed": r["reviewed"], "pending": r["pending"]} for r in trend_rows}
+        daily_trends = []
+        for i in range(6, -1, -1):
+            d = now - timedelta(days=i)
+            d_str = d.strftime("%Y-%m-%d")
+            data_day = day_map.get(d_str, {"reviewed": 0, "pending": 0})
+            daily_trends.append({
+                "day": d_str,
+                "label": d.strftime("%d %b"),
+                "count": data_day["reviewed"],
+                "pending": data_day["pending"],
+            })
 
         total_reviewed = conn.execute("SELECT COUNT(*) FROM reviews WHERE status = 'reviewed'").fetchone()[0]
         total_pending = conn.execute("SELECT COUNT(*) FROM reviews WHERE status = 'pending'").fetchone()[0]

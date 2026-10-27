@@ -720,6 +720,7 @@ def api_dashboard():
         "queue_metrics": dict(queue_metrics or {}),
         "inventory": inventory,
         "host_metrics": _host_metrics(),
+        "analytics": db.get_analytics_summary(),
         "csrf_token": _csrf_token(),
     })
 

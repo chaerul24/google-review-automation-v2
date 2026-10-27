@@ -47,6 +47,45 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client';
 
+// Catmull-Rom to Cubic Bézier spline helper for smooth SaaS curves
+function getSplinePaths(points, baselineY) {
+  if (!points || points.length === 0) return { linePath: '', areaPath: '' };
+  if (points.length === 1) {
+    const p = points[0];
+    return {
+      linePath: `M ${p.x.toFixed(1)} ${p.y.toFixed(1)}`,
+      areaPath: `M ${p.x.toFixed(1)} ${baselineY.toFixed(1)} L ${p.x.toFixed(1)} ${p.y.toFixed(1)} L ${p.x.toFixed(1)} ${baselineY.toFixed(1)} Z`,
+    };
+  }
+
+  let linePath = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
+  const tension = 0.35;
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = i > 0 ? points[i - 1] : points[i];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = i < points.length - 2 ? points[i + 2] : p2;
+
+    const cp1x = p1.x + (p2.x - p0.x) * tension;
+    let cp1y = p1.y + (p2.y - p0.y) * tension;
+    const cp2x = p2.x - (p3.x - p1.x) * tension;
+    let cp2y = p2.y - (p3.y - p1.y) * tension;
+
+    // Clamp control points between top bounds (15) and baseline
+    cp1y = Math.min(Math.max(cp1y, 15), baselineY);
+    cp2y = Math.min(Math.max(cp2y, 15), baselineY);
+
+    linePath += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+  }
+
+  const first = points[0];
+  const last = points[points.length - 1];
+  const areaPath = `${linePath} L ${last.x.toFixed(1)} ${baselineY.toFixed(1)} L ${first.x.toFixed(1)} ${baselineY.toFixed(1)} Z`;
+
+  return { linePath, areaPath };
+}
+
 export default function Dashboard({ onLogout }) {
   const navigate = useNavigate();
 
@@ -60,6 +99,10 @@ export default function Dashboard({ onLogout }) {
   const [isCheckingNames, setIsCheckingNames] = useState(false);
   const [data, setData] = useState(null);
   const [cliStatus, setCliStatus] = useState(null);
+
+  // Chart Interactive States
+  const [chartHoverIdx, setChartHoverIdx] = useState(null);
+  const [chartMetricView, setChartMetricView] = useState('both'); // 'both' | 'reviewed' | 'pending'
 
   // Search & Filter States
   const [searchQuery, setSearchQuery] = useState('');
@@ -371,6 +414,110 @@ export default function Dashboard({ onLogout }) {
   const cpuLoad1 = hostMetrics.cpu?.load_1 ? hostMetrics.cpu.load_1.toFixed(2) : '0.15';
   const cpuLoad5 = hostMetrics.cpu?.load_5 ? hostMetrics.cpu.load_5.toFixed(2) : '0.20';
   const cpuCores = hostMetrics.cpu?.logical_cpus || 4;
+
+  // ── Chart Calculations & Spline Data ─────────────────────────────────────────
+  const chartData = useMemo(() => {
+    const trends = data?.analytics?.daily_trends;
+    if (trends && trends.length > 0) {
+      return trends.map((t, idx) => {
+        const idLabel = (t.label || '')
+          .replace('Oct', 'Okt')
+          .replace('May', 'Mei')
+          .replace('Aug', 'Agu')
+          .replace('Dec', 'Des')
+          .replace('Jan', 'Jan')
+          .replace('Feb', 'Feb')
+          .replace('Mar', 'Mar')
+          .replace('Apr', 'Apr')
+          .replace('Jun', 'Jun')
+          .replace('Jul', 'Jul')
+          .replace('Sep', 'Sep')
+          .replace('Nov', 'Nov');
+        return {
+          day: t.day,
+          label: idLabel,
+          count: Number(t.count || 0),
+          pending: Number(t.pending || 0),
+          isToday: idx === trends.length - 1,
+        };
+      });
+    }
+    // Fallback: 7 days up to today
+    const list = [];
+    const now = new Date();
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dayStr = d.toISOString().split('T')[0];
+      list.push({
+        day: dayStr,
+        label: `${d.getDate()} ${monthNames[d.getMonth()]}`,
+        count: i === 0 ? Number(queueMetrics.reviewed || 0) : 0,
+        pending: i === 0 ? Number(queueMetrics.pending || 0) : 0,
+        isToday: i === 0,
+      });
+    }
+    return list;
+  }, [data?.analytics?.daily_trends, queueMetrics.reviewed, queueMetrics.pending]);
+
+  const chartW = 600;
+  const chartH = 190;
+  const paddingLeft = 40;
+  const paddingRight = 20;
+  const paddingTop = 25;
+  const paddingBottom = 30;
+  const effectiveW = chartW - paddingLeft - paddingRight;
+  const effectiveH = chartH - paddingTop - paddingBottom;
+  const baselineY = chartH - paddingBottom;
+
+  const rawMax = Math.max(4, ...chartData.map((d) => Math.max(d.count, d.pending)));
+  const chartMaxY = rawMax <= 4 ? 4 : rawMax <= 8 ? 8 : rawMax <= 15 ? 15 : Math.ceil(rawMax / 5) * 5;
+
+  const chartPoints = useMemo(() => {
+    return chartData.map((d, i) => {
+      const x = paddingLeft + (chartData.length > 1 ? (i / (chartData.length - 1)) * effectiveW : effectiveW / 2);
+      const reviewedY = baselineY - (d.count / chartMaxY) * effectiveH;
+      const pendingY = baselineY - (d.pending / chartMaxY) * effectiveH;
+      return {
+        ...d,
+        x,
+        reviewedY: Math.min(Math.max(reviewedY, paddingTop), baselineY),
+        pendingY: Math.min(Math.max(pendingY, paddingTop), baselineY),
+      };
+    });
+  }, [chartData, chartMaxY, effectiveW, effectiveH, baselineY, paddingLeft, paddingTop]);
+
+  const reviewedSpline = useMemo(() => {
+    return getSplinePaths(
+      chartPoints.map((p) => ({ x: p.x, y: p.reviewedY })),
+      baselineY
+    );
+  }, [chartPoints, baselineY]);
+
+  const pendingSpline = useMemo(() => {
+    return getSplinePaths(
+      chartPoints.map((p) => ({ x: p.x, y: p.pendingY })),
+      baselineY
+    );
+  }, [chartPoints, baselineY]);
+
+  const total7DaysReviewed = useMemo(() => {
+    return chartData.reduce((acc, cur) => acc + cur.count, 0);
+  }, [chartData]);
+
+  const total7DaysPending = useMemo(() => {
+    return chartData.reduce((acc, cur) => acc + cur.pending, 0);
+  }, [chartData]);
+
+  // Donut geometry for cookie health
+  const donutR = 44;
+  const donutCircumference = 2 * Math.PI * donutR; // ~276.46
+  const totalCookieCount = activeCookiesCount + needsLoginCookiesCount + expiredCookiesCount;
+  const activePercent = totalCookieCount > 0 ? Math.round((activeCookiesCount / totalCookieCount) * 100) : 0;
+  const activeLen = totalCookieCount > 0 ? (activeCookiesCount / totalCookieCount) * donutCircumference : 0;
+  const needsLen = totalCookieCount > 0 ? (needsLoginCookiesCount / totalCookieCount) * donutCircumference : 0;
+  const expiredLen = totalCookieCount > 0 ? (expiredCookiesCount / totalCookieCount) * donutCircumference : 0;
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
@@ -730,116 +877,414 @@ export default function Dashboard({ onLogout }) {
 
             {/* Middle Section: SaaS Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Chart 1: Review Velocity & Growth Chart (SVG Area Chart) */}
-              <div className="lg:col-span-2 bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h3 className="font-bold text-sm text-slate-900">Performa & Aktivitas Ulasan Bot</h3>
-                    <p className="text-xs text-slate-500">Distribusi ulasan sukses vs antrean waktu nyata</p>
+              {/* Chart 1: Review Velocity & Growth Chart (SVG Spline Line Chart) */}
+              <div className="lg:col-span-2 bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
+                <div>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-bold text-sm text-slate-900">Performa & Aktivitas Ulasan</h3>
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200/60">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                          Real-Time (7 Hari)
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Tren ulasan sukses vs antrean bot multi-display Chromium
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {/* View metric filter tabs */}
+                      <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/70 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => setChartMetricView('both')}
+                          className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                            chartMetricView === 'both'
+                              ? 'bg-white text-slate-900 shadow-2xs font-semibold'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Semua
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setChartMetricView('reviewed')}
+                          className={`px-2.5 py-1 rounded-lg font-medium transition-all flex items-center gap-1.5 ${
+                            chartMetricView === 'reviewed'
+                              ? 'bg-white text-blue-600 shadow-2xs font-semibold'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          <span className="w-2 h-2 rounded-full bg-blue-600"></span> Sukses ({total7DaysReviewed})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setChartMetricView('pending')}
+                          className={`px-2.5 py-1 rounded-lg font-medium transition-all flex items-center gap-1.5 ${
+                            chartMetricView === 'pending'
+                              ? 'bg-white text-amber-600 shadow-2xs font-semibold'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          <span className="w-2 h-2 rounded-full bg-amber-500"></span> Antrean ({total7DaysPending})
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="flex items-center gap-1 text-slate-600 font-medium">
-                      <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span> Sukses ({queueMetrics.reviewed || 0})
-                    </span>
-                    <span className="flex items-center gap-1 text-slate-600 font-medium ml-2">
-                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span> Antrean ({queueMetrics.pending || 0})
-                    </span>
+
+                  {/* SVG Spline Graphic Container */}
+                  <div className="h-60 w-full relative select-none">
+                    <svg className="w-full h-full overflow-visible" viewBox={`0 0 ${chartW} ${chartH}`} preserveAspectRatio="none">
+                      <defs>
+                        <linearGradient id="reviewedGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#2563EB" stopOpacity="0.22" />
+                          <stop offset="85%" stopColor="#2563EB" stopOpacity="0.02" />
+                          <stop offset="100%" stopColor="#2563EB" stopOpacity="0.0" />
+                        </linearGradient>
+                        <linearGradient id="pendingGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.18" />
+                          <stop offset="85%" stopColor="#F59E0B" stopOpacity="0.02" />
+                          <stop offset="100%" stopColor="#F59E0B" stopOpacity="0.0" />
+                        </linearGradient>
+                      </defs>
+
+                      {/* Horizontal Gridlines & Y-Axis Scale */}
+                      {[0, 1, 2, 3].map((step) => {
+                        const val = Math.round((chartMaxY / 3) * step);
+                        const y = baselineY - (step / 3) * effectiveH;
+                        return (
+                          <g key={step}>
+                            <line
+                              x1={paddingLeft}
+                              y1={y}
+                              x2={chartW - paddingRight}
+                              y2={y}
+                              stroke={step === 0 ? '#CBD5E1' : '#F1F5F9'}
+                              strokeDasharray={step === 0 ? '' : '4 4'}
+                              strokeWidth={step === 0 ? '1.2' : '1'}
+                            />
+                            <text
+                              x={paddingLeft - 8}
+                              y={y + 3.5}
+                              textAnchor="end"
+                              className="fill-slate-400 font-mono text-[10px] select-none"
+                            >
+                              {val}
+                            </text>
+                          </g>
+                        );
+                      })}
+
+                      {/* Series 1: Reviewed Area & Spline Line */}
+                      {(chartMetricView === 'both' || chartMetricView === 'reviewed') && (
+                        <>
+                          <path
+                            d={reviewedSpline.areaPath}
+                            fill="url(#reviewedGrad)"
+                            className="transition-all duration-300"
+                          />
+                          <path
+                            d={reviewedSpline.linePath}
+                            fill="none"
+                            stroke="#2563EB"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="transition-all duration-300"
+                          />
+                        </>
+                      )}
+
+                      {/* Series 2: Pending Area & Spline Line */}
+                      {(chartMetricView === 'both' || chartMetricView === 'pending') && (
+                        <>
+                          <path
+                            d={pendingSpline.areaPath}
+                            fill="url(#pendingGrad)"
+                            className="transition-all duration-300"
+                          />
+                          <path
+                            d={pendingSpline.linePath}
+                            fill="none"
+                            stroke="#F59E0B"
+                            strokeWidth="2"
+                            strokeDasharray="4 4"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            className="transition-all duration-300"
+                          />
+                        </>
+                      )}
+
+                      {/* Normal Dots */}
+                      {chartPoints.map((p, idx) => {
+                        if (chartHoverIdx === idx) return null;
+                        return (
+                          <g key={`dots-${idx}`}>
+                            {(chartMetricView === 'both' || chartMetricView === 'reviewed') && (
+                              <circle
+                                cx={p.x}
+                                cy={p.reviewedY}
+                                r={p.count > 0 ? 3.5 : 2.5}
+                                fill={p.count > 0 ? '#2563EB' : '#94A3B8'}
+                                stroke="#FFFFFF"
+                                strokeWidth="1.5"
+                              />
+                            )}
+                            {(chartMetricView === 'both' || chartMetricView === 'pending') && p.pending > 0 && (
+                              <circle
+                                cx={p.x}
+                                cy={p.pendingY}
+                                r="3"
+                                fill="#F59E0B"
+                                stroke="#FFFFFF"
+                                strokeWidth="1.5"
+                              />
+                            )}
+                          </g>
+                        );
+                      })}
+
+                      {/* Hover Crosshair & Glowing Nodes */}
+                      {chartHoverIdx !== null && chartPoints[chartHoverIdx] && (
+                        <g>
+                          <line
+                            x1={chartPoints[chartHoverIdx].x}
+                            y1={paddingTop - 10}
+                            x2={chartPoints[chartHoverIdx].x}
+                            y2={baselineY}
+                            stroke="#94A3B8"
+                            strokeDasharray="3 3"
+                            strokeWidth="1.2"
+                          />
+                          {(chartMetricView === 'both' || chartMetricView === 'reviewed') && (
+                            <>
+                              <circle
+                                cx={chartPoints[chartHoverIdx].x}
+                                cy={chartPoints[chartHoverIdx].reviewedY}
+                                r="9"
+                                fill="#2563EB"
+                                fillOpacity="0.22"
+                              />
+                              <circle
+                                cx={chartPoints[chartHoverIdx].x}
+                                cy={chartPoints[chartHoverIdx].reviewedY}
+                                r="4.5"
+                                fill="#FFFFFF"
+                                stroke="#2563EB"
+                                strokeWidth="3"
+                              />
+                            </>
+                          )}
+                          {(chartMetricView === 'both' || chartMetricView === 'pending') && (
+                            <>
+                              <circle
+                                cx={chartPoints[chartHoverIdx].x}
+                                cy={chartPoints[chartHoverIdx].pendingY}
+                                r="8"
+                                fill="#F59E0B"
+                                fillOpacity="0.22"
+                              />
+                              <circle
+                                cx={chartPoints[chartHoverIdx].x}
+                                cy={chartPoints[chartHoverIdx].pendingY}
+                                r="4"
+                                fill="#FFFFFF"
+                                stroke="#F59E0B"
+                                strokeWidth="2.5"
+                              />
+                            </>
+                          )}
+                        </g>
+                      )}
+
+                      {/* Hitbox Columns */}
+                      {chartPoints.map((p, idx) => {
+                        const colW = effectiveW / Math.max(1, chartPoints.length - 1);
+                        return (
+                          <rect
+                            key={`hitbox-${idx}`}
+                            x={p.x - colW / 2}
+                            y={0}
+                            width={colW}
+                            height={chartH}
+                            fill="transparent"
+                            className="cursor-pointer"
+                            onMouseEnter={() => setChartHoverIdx(idx)}
+                            onMouseLeave={() => setChartHoverIdx(null)}
+                          />
+                        );
+                      })}
+                    </svg>
+
+                    {/* Floating Tooltip Pill */}
+                    {chartHoverIdx !== null && chartPoints[chartHoverIdx] && (() => {
+                      const activeY = Math.min(chartPoints[chartHoverIdx].reviewedY, chartPoints[chartHoverIdx].pendingY);
+                      const isNearTop = activeY < 75;
+                      const isLast = chartHoverIdx === chartPoints.length - 1;
+                      const isFirst = chartHoverIdx === 0;
+
+                      let transform = 'translate(-50%, -100%)';
+                      if (isNearTop) {
+                        transform = isLast ? 'translate(-95%, 15px)' : isFirst ? 'translate(5%, 15px)' : 'translate(-50%, 15px)';
+                      } else {
+                        transform = isLast ? 'translate(-95%, -110%)' : isFirst ? 'translate(5%, -110%)' : 'translate(-50%, -110%)';
+                      }
+
+                      return (
+                        <div
+                          className="absolute pointer-events-none z-30 bg-slate-900/95 text-white rounded-xl px-3.5 py-2.5 shadow-2xl border border-slate-700/80 backdrop-blur-md transition-all duration-100 font-sans min-w-[170px] whitespace-nowrap"
+                          style={{
+                            left: `${(chartPoints[chartHoverIdx].x / chartW) * 100}%`,
+                            top: `${activeY}px`,
+                            transform,
+                          }}
+                        >
+                          <div className="flex items-center justify-between gap-3 pb-1.5 border-b border-slate-700/60 text-xs">
+                            <span className="font-semibold text-slate-200">
+                              {chartPoints[chartHoverIdx].label} {chartPoints[chartHoverIdx].isToday ? '• Hari Ini' : ''}
+                            </span>
+                            <span className="text-[10px] font-mono text-slate-400">{chartPoints[chartHoverIdx].day}</span>
+                          </div>
+                          <div className="mt-2 space-y-1 text-xs">
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="flex items-center gap-1.5 text-slate-300">
+                                <span className="w-2 h-2 rounded-full bg-blue-500 shadow-sm shadow-blue-500/50"></span> Sukses:
+                              </span>
+                              <span className="font-bold text-white font-mono">{chartPoints[chartHoverIdx].count} ulasan</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="flex items-center gap-1.5 text-slate-300">
+                                <span className="w-2 h-2 rounded-full bg-amber-500 shadow-sm shadow-amber-500/50"></span> Antrean:
+                              </span>
+                              <span className="font-bold text-amber-300 font-mono">{chartPoints[chartHoverIdx].pending} ulasan</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
 
-                {/* SVG Area Chart Graphic */}
-                <div className="h-56 w-full relative">
-                  <svg className="w-full h-full" viewBox="0 0 600 200" preserveAspectRatio="none">
-                    <defs>
-                      <linearGradient id="areaGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#2563EB" stopOpacity="0.3" />
-                        <stop offset="100%" stopColor="#2563EB" stopOpacity="0.0" />
-                      </linearGradient>
-                      <linearGradient id="pendingGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.25" />
-                        <stop offset="100%" stopColor="#F59E0B" stopOpacity="0.0" />
-                      </linearGradient>
-                    </defs>
-
-                    {/* Horizontal Grid lines */}
-                    <line x1="0" y1="40" x2="600" y2="40" stroke="#E2E8F0" strokeDasharray="3 3" />
-                    <line x1="0" y1="90" x2="600" y2="90" stroke="#E2E8F0" strokeDasharray="3 3" />
-                    <line x1="0" y1="140" x2="600" y2="140" stroke="#E2E8F0" strokeDasharray="3 3" />
-                    <line x1="0" y1="190" x2="600" y2="190" stroke="#CBD5E1" />
-
-                    {/* Area 1: Reviewed Reviews */}
-                    <path
-                      d="M 0 170 Q 100 130, 200 110 T 400 65 T 600 30 L 600 190 L 0 190 Z"
-                      fill="url(#areaGradient)"
-                    />
-                    <path
-                      d="M 0 170 Q 100 130, 200 110 T 400 65 T 600 30"
-                      fill="none"
-                      stroke="#2563EB"
-                      strokeWidth="3"
-                    />
-
-                    {/* Area 2: Pending Reviews Line */}
-                    <path
-                      d="M 0 185 Q 120 160, 250 140 T 450 120 T 600 115"
-                      fill="none"
-                      stroke="#F59E0B"
-                      strokeWidth="2.5"
-                      strokeDasharray="4 4"
-                    />
-
-                    {/* Data Points */}
-                    <circle cx="200" cy="110" r="4" fill="#2563EB" stroke="#FFFFFF" strokeWidth="2" />
-                    <circle cx="400" cy="65" r="4" fill="#2563EB" stroke="#FFFFFF" strokeWidth="2" />
-                    <circle cx="600" cy="30" r="5" fill="#2563EB" stroke="#FFFFFF" strokeWidth="2" />
-                  </svg>
-                </div>
-
-                <div className="flex justify-between items-center text-[11px] text-slate-500 font-mono mt-2 pt-2 border-t border-slate-100">
-                  <span>Batch 1 (Awal)</span>
-                  <span>Batch 2</span>
-                  <span>Batch 3</span>
-                  <span>Batch 4</span>
-                  <span>Hari Ini (Real-Time)</span>
+                {/* X-Axis Labels */}
+                <div className="flex justify-between items-center text-[11px] font-mono text-slate-500 pt-3 border-t border-slate-100 mt-2">
+                  {chartPoints.map((p, idx) => (
+                    <div
+                      key={idx}
+                      className={`text-center cursor-pointer transition-colors ${
+                        chartHoverIdx === idx
+                          ? 'text-blue-600 font-bold'
+                          : p.isToday
+                          ? 'text-slate-900 font-bold'
+                          : 'hover:text-slate-700'
+                      }`}
+                      onMouseEnter={() => setChartHoverIdx(idx)}
+                      onMouseLeave={() => setChartHoverIdx(null)}
+                    >
+                      <div>{p.label}</div>
+                      {p.isToday && (
+                        <span className="inline-block mt-0.5 text-[9px] font-sans px-1.5 py-0.2 rounded-full bg-blue-50 text-blue-600 border border-blue-200/60 font-semibold">
+                          Hari Ini
+                        </span>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
 
               {/* Chart 2: Cookie Session Health (SVG Donut Chart) */}
               <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
                 <div>
-                  <h3 className="font-bold text-sm text-slate-900">Kesehatan Sesi Cookie</h3>
-                  <p className="text-xs text-slate-500">Rasio status akun terverifikasi Google</p>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="font-bold text-sm text-slate-900">Kesehatan Sesi Cookie</h3>
+                      <p className="text-xs text-slate-500">Rasio status akun terverifikasi Google Maps</p>
+                    </div>
+                    <span className="text-xs font-mono font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200/60">
+                      {totalCookieCount} Total
+                    </span>
+                  </div>
 
                   {/* Donut Graphic */}
-                  <div className="my-6 flex items-center justify-center relative">
+                  <div className="my-5 flex items-center justify-center relative">
                     <svg className="w-40 h-40 transform -rotate-90" viewBox="0 0 120 120">
-                      {/* Background circle */}
-                      <circle cx="60" cy="60" r="48" stroke="#F1F5F9" strokeWidth="14" fill="none" />
-                      {/* Active Arc (Emerald) */}
-                      <circle
-                        cx="60"
-                        cy="60"
-                        r="48"
-                        stroke="#10B981"
-                        strokeWidth="14"
-                        fill="none"
-                        strokeDasharray="301.6"
-                        strokeDashoffset={
-                          cookies.length > 0
-                            ? 301.6 - (activeCookiesCount / cookies.length) * 301.6
-                            : 301.6
-                        }
-                        strokeLinecap="round"
-                        className="transition-all duration-1000"
-                      />
+                      {/* Background circle track */}
+                      <circle cx="60" cy="60" r={donutR} stroke="#F1F5F9" strokeWidth="13" fill="none" />
+
+                      {totalCookieCount > 0 && (
+                        <>
+                          {/* Active Arc (Emerald) */}
+                          {activeLen > 0 && (
+                            <circle
+                              cx="60"
+                              cy="60"
+                              r={donutR}
+                              stroke="#10B981"
+                              strokeWidth="13"
+                              fill="none"
+                              strokeDasharray={`${activeLen} ${donutCircumference - activeLen}`}
+                              strokeDashoffset={0}
+                              className="transition-all duration-700 ease-out"
+                            />
+                          )}
+                          {/* Needs Login Arc (Amber) */}
+                          {needsLen > 0 && (
+                            <circle
+                              cx="60"
+                              cy="60"
+                              r={donutR}
+                              stroke="#F59E0B"
+                              strokeWidth="13"
+                              fill="none"
+                              strokeDasharray={`${needsLen} ${donutCircumference - needsLen}`}
+                              strokeDashoffset={-activeLen}
+                              className="transition-all duration-700 ease-out"
+                            />
+                          )}
+                          {/* Expired Arc (Rose) */}
+                          {expiredLen > 0 && (
+                            <circle
+                              cx="60"
+                              cy="60"
+                              r={donutR}
+                              stroke="#F43F5E"
+                              strokeWidth="13"
+                              fill="none"
+                              strokeDasharray={`${expiredLen} ${donutCircumference - expiredLen}`}
+                              strokeDashoffset={-(activeLen + needsLen)}
+                              className="transition-all duration-700 ease-out"
+                            />
+                          )}
+                        </>
+                      )}
                     </svg>
 
-                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                      <span className="text-2xl font-extrabold text-slate-900 font-mono">
-                        {cookies.length > 0 ? Math.round((activeCookiesCount / cookies.length) * 100) : 0}%
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-center select-none pointer-events-none">
+                      <span className="text-2xl font-black text-slate-900 font-mono tracking-tight">
+                        {activePercent}%
                       </span>
-                      <span className="text-[10px] text-slate-500 font-semibold uppercase">Sesi Siap</span>
+                      <span className="text-[10px] text-emerald-600 font-bold uppercase tracking-wider bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200/50 mt-0.5">
+                        Sesi Siap
+                      </span>
                     </div>
+                  </div>
+
+                  {/* Multi-segment progress bar */}
+                  <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden flex my-2">
+                    <div
+                      style={{ width: `${totalCookieCount > 0 ? (activeCookiesCount / totalCookieCount) * 100 : 0}%` }}
+                      className="bg-emerald-500 transition-all duration-500"
+                    />
+                    <div
+                      style={{ width: `${totalCookieCount > 0 ? (needsLoginCookiesCount / totalCookieCount) * 100 : 0}%` }}
+                      className="bg-amber-500 transition-all duration-500"
+                    />
+                    <div
+                      style={{ width: `${totalCookieCount > 0 ? (expiredCookiesCount / totalCookieCount) * 100 : 0}%` }}
+                      className="bg-rose-500 transition-all duration-500"
+                    />
                   </div>
                 </div>
 
