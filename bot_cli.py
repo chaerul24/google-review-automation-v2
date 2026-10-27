@@ -14,6 +14,8 @@ import argparse
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -23,6 +25,10 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+# Version Tracking & Manifest
+CLI_VERSION = "v1.0.2"
+CLI_VERSION_CODE = 102
 
 # Enable ANSI colors on Windows cmd.exe
 if sys.platform == "win32":
@@ -313,6 +319,30 @@ class ServerClient:
             payload["all_accounts"] = True
         return self._request(f"/api/businesses/{business_id}/dark-mode/delete-maps-reviews", method="POST", data=payload)
 
+    def get_cli_version(self) -> Dict[str, Any]:
+        """Fetch version manifest and check for newer releases from server."""
+        try:
+            req = urllib.request.Request(
+                f"{self.base_url}/api/cli/version",
+                headers={"User-Agent": f"AutoBotix-Windows-CLI/{CLI_VERSION}"},
+            )
+            with urllib.request.urlopen(req, timeout=3.5) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return {}
+
+    def download_cli_update(self) -> Optional[str]:
+        """Download latest bot_cli.py source directly from server."""
+        try:
+            req = urllib.request.Request(
+                f"{self.base_url}/api/cli/download",
+                headers={"User-Agent": f"AutoBotix-Windows-CLI/{CLI_VERSION}"},
+            )
+            with urllib.request.urlopen(req, timeout=12.0) as resp:
+                return resp.read().decode("utf-8")
+        except Exception:
+            return None
+
 
 # ── UI Helpers & Animation ───────────────────────────────────────────────────
 
@@ -463,11 +493,12 @@ def print_banner(client: ServerClient, status_info: Optional[Dict[str, Any]] = N
     print()
     print_google_maps_logo("                  ")
     print(f"               {C_DIM}« Native Chromium • Zero-VM Architecture »{C_RESET}")
+    print(f"                       {C_BOLD}{C_GREEN}AutoBotix CLI {CLI_VERSION}{C_RESET}")
     print()
 
     user_label = client.username or "admin"
     lines = [
-        f"{C_DIM}Host Server:{C_RESET} {C_GREEN}{client.base_url}{C_RESET}   {C_DIM}User:{C_RESET} {C_CYAN}{user_label}{C_RESET}"
+        f"{C_DIM}Host Server:{C_RESET} {C_GREEN}{client.base_url}{C_RESET}   {C_DIM}User:{C_RESET} {C_CYAN}{user_label}{C_RESET}   {C_DIM}Versi:{C_RESET} {C_YELLOW}{CLI_VERSION}{C_RESET}"
     ]
     if status_info:
         b_cnt = status_info.get("businesses_count", 0)
@@ -607,6 +638,191 @@ def _do_register(client: ServerClient) -> bool:
         return False
 
 
+def print_version_history(client: ServerClient):
+    """Display changelog history of all released versions."""
+    spin = Spinner("Mengambil riwayat versi dari server...")
+    spin.start()
+    try:
+        ver_info = client.get_cli_version()
+        spin.stop()
+    except Exception:
+        spin.stop()
+        ver_info = {}
+
+    versions = ver_info.get("versions") or [
+        {
+            "version": "v1.0.0",
+            "release_date": "2026-10-25",
+            "title": "Initial Release",
+            "description": "Rilis perdana AutoBotix Windows CLI Native Chromium & Multi-Display Xvfb.",
+        },
+        {
+            "version": "v1.0.1",
+            "release_date": "2026-10-26",
+            "title": "Review Cleaner & CDP Lock",
+            "description": "Fitur Hapus Ulasan (Database Cleaner & Live Maps Chromium) + Proteksi CDP Session.",
+        },
+        {
+            "version": "v1.0.2",
+            "release_date": "2026-10-27",
+            "title": "Queue Anti-Bot & Auto-Update",
+            "description": "Sistem Antrean Ulasan Anti-Bot, jeda konstan, live queue inspector, dan auto-update versioning.",
+        },
+    ]
+
+    print()
+    box_header(f"{C_BOLD}{C_CYAN}RIWAYAT VERSI & CHANGELOG AUTOBOTIX CLI{C_RESET}")
+    print()
+    print(f" {C_BOLD}{'VERSI':<9} {'TANGGAL':<12} {'KETERANGAN & FITUR BARU'}{C_RESET}")
+    print(" " + "─" * 78)
+
+    for v in versions:
+        v_num = v.get("version", "")
+        v_date = v.get("release_date", "")
+        v_desc = v.get("description", "")
+        v_badge = f"{C_BOLD}{C_GREEN}{v_num:<9}{C_RESET}" if v_num == CLI_VERSION else f"{C_CYAN}{v_num:<9}{C_RESET}"
+        print(f" {v_badge} {C_DIM}{v_date:<12}{C_RESET} {C_WHITE}{v_desc}{C_RESET}")
+
+    print()
+    input(f" {C_DIM}Tekan Enter untuk kembali ke menu autentikasi...{C_RESET}")
+
+
+def check_and_apply_update(client: ServerClient) -> bool:
+    """Check server for new CLI version, auto-update, and reload if available.
+    
+    Returns True if current version is up-to-date or update was handled.
+    If updated, automatically re-executes the python process and never returns.
+    """
+    if os.environ.get("BOT_NO_UPDATE") == "1":
+        return True
+
+    # Avoid recursive loops if just reloaded
+    if os.environ.get("BOT_JUST_RELOADED") == "1":
+        os.environ.pop("BOT_JUST_RELOADED", None)
+        print(f"\n {C_BOLD}{C_GREEN}✓ Aplikasi berhasil dimuat ulang dengan versi terbaru ({CLI_VERSION})!{C_RESET}")
+        time.sleep(0.9)
+        return True
+
+    print()
+    spin = Spinner(f"Memeriksa pembaruan AutoBotix CLI (Versi lokal: {CLI_VERSION})...")
+    spin.start()
+
+    try:
+        ver_info = client.get_cli_version()
+        spin.stop()
+    except Exception:
+        spin.stop()
+        return True
+
+    if not ver_info or ver_info.get("status") != "ok":
+        # Server unreachable or endpoint not available
+        return True
+
+    latest_ver = ver_info.get("latest_version") or CLI_VERSION
+    latest_code = int(ver_info.get("latest_version_code") or 0)
+    changelog = ver_info.get("changelog") or "Pembaruan sistem & perbaikan bug."
+
+    # Parse version codes if not provided
+    if latest_code == 0:
+        try:
+            latest_code = int(latest_ver.replace("v", "").replace(".", ""))
+        except Exception:
+            latest_code = CLI_VERSION_CODE
+
+    # Check if update is needed
+    if latest_code > CLI_VERSION_CODE or latest_ver != CLI_VERSION:
+        print()
+        box_lines = [
+            f"{C_BOLD}{C_YELLOW}🚀 PEMBARUAN VERSI DITEMUKAN!{C_RESET}",
+            f" Versi Terpasang : {C_RED}{CLI_VERSION}{C_RESET}",
+            f" Versi Terbaru   : {C_BOLD}{C_GREEN}{latest_ver}{C_RESET}",
+            f" Changelog       : {C_WHITE}{changelog}{C_RESET}",
+            "─" * 64,
+            f"{C_CYAN}Mengunduh & memasang pembaruan otomatis...{C_RESET}",
+        ]
+        print_box(box_lines, width=68)
+        print()
+
+        update_success = False
+
+        # 1. Try git pull if running inside git clone repository
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        is_git_repo = os.path.isdir(os.path.join(script_dir, ".git"))
+
+        if is_git_repo and shutil.which("git"):
+            g_spin = Spinner("Memperbarui source code via Git (git pull origin main)...")
+            g_spin.start()
+            try:
+                sub_res = subprocess.run(
+                    ["git", "pull", "origin", "main"],
+                    cwd=script_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                if sub_res.returncode == 0:
+                    g_spin.stop(f" {C_BOLD}{C_GREEN}✓ Berhasil memperbarui source code dari Git!{C_RESET}")
+                    update_success = True
+                else:
+                    g_spin.stop(f" {C_YELLOW}▲ Git pull gagal, mencoba download langsung dari server...{C_RESET}")
+            except Exception:
+                g_spin.stop()
+
+        # 2. If not git or git pull failed, download latest bot_cli.py from server
+        if not update_success:
+            d_spin = Spinner("Mengunduh bot_cli.py terbaru langsung dari server AutoBotix...")
+            d_spin.start()
+            new_code = client.download_cli_update()
+            if new_code and len(new_code) > 1000 and "AutoBotix" in new_code:
+                cur_file = os.path.abspath(__file__)
+                tmp_file = cur_file + ".new"
+                try:
+                    with open(tmp_file, "w", encoding="utf-8") as f:
+                        f.write(new_code)
+                    if sys.platform == "win32":
+                        bak_file = cur_file + ".bak"
+                        if os.path.exists(bak_file):
+                            try:
+                                os.remove(bak_file)
+                            except Exception:
+                                pass
+                        try:
+                            os.replace(tmp_file, cur_file)
+                        except Exception:
+                            os.rename(cur_file, bak_file)
+                            os.rename(tmp_file, cur_file)
+                    else:
+                        os.replace(tmp_file, cur_file)
+                    d_spin.stop(f" {C_BOLD}{C_GREEN}✓ File bot_cli.py berhasil diperbarui ke {latest_ver}!{C_RESET}")
+                    update_success = True
+                except Exception as w_err:
+                    d_spin.stop(f" {C_RED}✖ Gagal menulis pembaruan: {w_err}{C_RESET}")
+                    if os.path.exists(tmp_file):
+                        try:
+                            os.remove(tmp_file)
+                        except Exception:
+                            pass
+            else:
+                d_spin.stop(f" {C_RED}✖ Gagal mengunduh file pembaruan dari server.{C_RESET}")
+
+        if update_success:
+            print(f"\n {C_BOLD}{C_GREEN}Memuat ulang aplikasi secara otomatis (Auto-Reload)...{C_RESET}")
+            time.sleep(1.2)
+            os.environ["BOT_JUST_RELOADED"] = "1"
+            # Auto reload current Python process
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+            sys.exit(0)
+        else:
+            print(f" {C_YELLOW}Melanjutkan program dengan versi lokal saat ini ({CLI_VERSION})...{C_RESET}")
+            time.sleep(1.2)
+            return True
+    else:
+        # Up-to-date
+        spin.stop(f" {C_BOLD}{C_GREEN}✓ AutoBotix CLI {CLI_VERSION} (Versi Terkini • Sistem Siap Digunakan){C_RESET}")
+        time.sleep(0.6)
+        return True
+
+
 def prompt_auth(client: ServerClient, default_user: str = "admin") -> bool:
     """Display Authentication Menu (Login / Register / Exit) before task menu."""
     while True:
@@ -614,16 +830,19 @@ def prompt_auth(client: ServerClient, default_user: str = "admin") -> bool:
         print()
         print_google_maps_logo("                  ")
         print(f"               {C_DIM}« Native Chromium • Zero-VM Architecture »{C_RESET}")
+        print(f"                       {C_BOLD}{C_GREEN}AutoBotix CLI {CLI_VERSION}{C_RESET}")
         print()
-        print(f" {C_DIM}Host Server Target: {C_GREEN}{client.base_url}{C_RESET}")
+        print(f" {C_DIM}Host Server Target : {C_GREEN}{client.base_url}{C_RESET}")
+        print(f" {C_DIM}Versi Aplikasi     : {C_CYAN}{CLI_VERSION}{C_RESET} {C_GREEN}(Auto-Update Aktif ●){C_RESET}")
         print()
         print(f" {C_BOLD}{C_CYAN}[1]{C_RESET} {C_WHITE}Masuk (Login){C_RESET}")
         print(f" {C_BOLD}{C_CYAN}[2]{C_RESET} {C_WHITE}Daftar Akun Baru (Register){C_RESET}")
+        print(f" {C_BOLD}{C_CYAN}[3]{C_RESET} {C_WHITE}Riwayat Versi (Changelog v1.0.0 - {CLI_VERSION}){C_RESET}")
         print(f" {C_BOLD}{C_YELLOW}[0]{C_RESET} {C_DIM}Keluar (Exit){C_RESET}")
         print()
 
         try:
-            choice = input(f" {C_GREEN}Pilih menu autentikasi [1]: {C_RESET}").strip()
+            choice = input(f" {C_GREEN}Pilih menu autentikasi [1-3] (default 1): {C_RESET}").strip()
         except (KeyboardInterrupt, EOFError):
             print(f"\n\n {C_YELLOW}Keluar dari program.{C_RESET}")
             sys.exit(0)
@@ -637,11 +856,13 @@ def prompt_auth(client: ServerClient, default_user: str = "admin") -> bool:
         elif choice == "2":
             if _do_register(client):
                 return True
+        elif choice == "3":
+            print_version_history(client)
         elif choice == "0":
             print(f"\n {C_YELLOW}Terima kasih. Program selesai.{C_RESET}")
             sys.exit(0)
         else:
-            print(f" {C_RED}Pilihan tidak valid. Masukkan 1, 2, atau 0.{C_RESET}")
+            print(f" {C_RED}Pilihan tidak valid. Masukkan 1, 2, 3, atau 0.{C_RESET}")
             time.sleep(1)
 
 
@@ -1673,6 +1894,8 @@ def main():
     parser.add_argument("--user", "-u", default=None, help="Username login server (default: admin)")
     parser.add_argument("--password", "-p", default=None, help="Password login server")
     parser.add_argument("--key", "-k", default=DEFAULT_API_KEY, help="API Key / Password Server (opsional)")
+    parser.add_argument("--version", "-v", action="version", version=f"AutoBotix CLI {CLI_VERSION} (Build {CLI_VERSION_CODE})")
+    parser.add_argument("--no-update", action="store_true", help="Lewati pemeriksaan update otomatis saat startup")
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -1720,6 +1943,10 @@ def main():
 
     args = parser.parse_args()
     client = ServerClient(base_url=args.server, api_key=args.key or "")
+
+    # Jalankan pemeriksaan update versi otomatis sebelum masuk menu / task
+    if not args.no_update:
+        check_and_apply_update(client)
 
     # Auto-login if credentials provided via arguments
     if args.user and args.password:

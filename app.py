@@ -29,6 +29,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_file,
     send_from_directory,
     session,
     stream_with_context,
@@ -309,6 +310,59 @@ def login_required(f):
             return redirect(url_for("login"))
         return f(*args, **kwargs)
     return decorated
+
+
+# ── CLI Version Manifest & Updater Endpoints ─────────────────────────────────
+
+CLI_VERSIONS = [
+    {
+        "version": "v1.0.0",
+        "version_code": 100,
+        "release_date": "2026-10-25",
+        "title": "Initial CLI Release",
+        "description": "Rilis perdana AutoBotix Windows CLI dengan arsitektur Native Chromium & Multi-Display Virtual Xvfb.",
+    },
+    {
+        "version": "v1.0.1",
+        "version_code": 101,
+        "release_date": "2026-10-26",
+        "title": "Review Cleaner & CDP Lock",
+        "description": "Fitur Hapus Ulasan (Database Cleaner & Live Maps Chromium) dan proteksi Mutex Profile Browser.",
+    },
+    {
+        "version": "v1.0.2",
+        "version_code": 102,
+        "release_date": "2026-10-27",
+        "title": "Review Queue & Auto-Update",
+        "description": "Sistem Daftar Antrean Ulasan (Anti-Bot Queue), jeda alami konstan, live queue inspector, dan auto-update versioning.",
+    },
+]
+
+LATEST_CLI_VERSION = "v1.0.2"
+LATEST_CLI_VERSION_CODE = 102
+
+
+@app.route("/api/cli/version", methods=["GET"])
+def api_cli_version():
+    """Return CLI version information, release changelog, and latest download link."""
+    return jsonify({
+        "status": "ok",
+        "latest_version": LATEST_CLI_VERSION,
+        "latest_version_code": LATEST_CLI_VERSION_CODE,
+        "min_supported_version": "v1.0.0",
+        "versions": CLI_VERSIONS,
+        "changelog": CLI_VERSIONS[-1]["description"],
+        "download_url": "/api/cli/download",
+    })
+
+
+@app.route("/api/cli/download", methods=["GET"])
+def api_cli_download():
+    """Download the latest bot_cli.py script directly from the server."""
+    cli_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_cli.py")
+    if not os.path.exists(cli_path):
+        return jsonify({"status": "error", "message": "File bot_cli.py not found on server"}), 404
+    return send_file(cli_path, as_attachment=True, download_name="bot_cli.py", mimetype="text/x-python")
 
 
 @app.route("/api/cli/login", methods=["POST"])
