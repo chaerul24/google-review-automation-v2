@@ -376,10 +376,10 @@ export default function Dashboard({ onLogout }) {
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-[#0F172A] flex font-['Plus_Jakarta_Sans',sans-serif]">
       {/* ========================================================================= */}
-      {/* SIDEBAR: "hitam tapi bukan kaya hitam" -> Slate-900 (#0F172A) Modern Sleek */}
+      {/* SIDEBAR: "hitam tapi bukan kaya hitam" -> Slate-900 (#0F172A) Sharp Flat */}
       {/* ========================================================================= */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 bg-[#0F172A] text-slate-300 border-r border-slate-800/80 flex flex-col justify-between transition-transform duration-200 lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 w-64 bg-[#0F172A] text-slate-300 border-r border-slate-800/80 flex flex-col justify-between rounded-none transition-transform duration-200 lg:static lg:translate-x-0 ${
           mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -387,38 +387,31 @@ export default function Dashboard({ onLogout }) {
         <div>
           <div className="h-16 px-5 border-b border-slate-800/80 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-500 to-cyan-500 flex items-center justify-center text-white font-extrabold shadow-lg shadow-emerald-500/20">
-                <MapPin className="w-5 h-5 text-white" />
+              <div className="w-8 h-8 rounded-none bg-gradient-to-tr from-emerald-500 to-cyan-500 flex items-center justify-center text-white font-extrabold shadow-sm">
+                <MapPin className="w-4 h-4 text-white" />
               </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="font-bold text-base text-white tracking-tight">AutoBotix</span>
-                  <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
-                    SaaS
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-400 font-medium">Master Akun & Review</p>
+              <div className="flex items-center gap-1.5">
+                <span className="font-bold text-base text-white tracking-tight">AutoBotix</span>
+                <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-none border border-emerald-500/20 font-mono">
+                  SaaS
+                </span>
               </div>
             </div>
             <button
               onClick={() => setMobileMenuOpen(false)}
-              className="lg:hidden text-slate-400 hover:text-white p-1"
+              className="lg:hidden text-slate-400 hover:text-white p-1 rounded-none"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
 
-          {/* Navigation Links */}
-          <div className="p-3 space-y-1">
-            <div className="px-3 pt-3 pb-1 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-              Menu Utama
-            </div>
-
+          {/* Navigation Links (Zero Border Radius, Clean No-Subtitle) */}
+          <div className="py-2 space-y-0.5">
             <button
               onClick={() => { setActiveTab('overview'); setMobileMenuOpen(false); }}
-              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+              className={`w-full flex items-center px-4 py-3 rounded-none text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === 'overview'
-                  ? 'bg-slate-800 text-white shadow-xs border-l-3 border-emerald-500'
+                  ? 'bg-slate-800 text-white border-l-3 border-emerald-500'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
               }`}
             >
@@ -426,16 +419,13 @@ export default function Dashboard({ onLogout }) {
                 <BarChart3 className={`w-4 h-4 ${activeTab === 'overview' ? 'text-emerald-400' : 'text-slate-400'}`} />
                 <span>Dashboard & Ringkasan</span>
               </div>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-900/60 text-slate-300 font-mono">
-                Live
-              </span>
             </button>
 
             <button
               onClick={() => { setActiveTab('accounts'); setMobileMenuOpen(false); }}
-              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+              className={`w-full flex items-center px-4 py-3 rounded-none text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === 'accounts'
-                  ? 'bg-slate-800 text-white shadow-xs border-l-3 border-emerald-500'
+                  ? 'bg-slate-800 text-white border-l-3 border-emerald-500'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
               }`}
             >
@@ -443,16 +433,13 @@ export default function Dashboard({ onLogout }) {
                 <Users className={`w-4 h-4 ${activeTab === 'accounts' ? 'text-emerald-400' : 'text-slate-400'}`} />
                 <span>Master Akun Google</span>
               </div>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-900/60 text-emerald-400 font-mono font-bold">
-                {activeAccountsCount}/{emails.length}
-              </span>
             </button>
 
             <button
               onClick={() => { setActiveTab('cookies'); setMobileMenuOpen(false); }}
-              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+              className={`w-full flex items-center px-4 py-3 rounded-none text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === 'cookies'
-                  ? 'bg-slate-800 text-white shadow-xs border-l-3 border-emerald-500'
+                  ? 'bg-slate-800 text-white border-l-3 border-emerald-500'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
               }`}
             >
@@ -460,18 +447,13 @@ export default function Dashboard({ onLogout }) {
                 <Cookie className={`w-4 h-4 ${activeTab === 'cookies' ? 'text-emerald-400' : 'text-slate-400'}`} />
                 <span>Kelola Cookie Sesi</span>
               </div>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${
-                activeCookiesCount > 0 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400'
-              }`}>
-                {activeCookiesCount} Aktif
-              </span>
             </button>
 
             <button
               onClick={() => { setActiveTab('server'); setMobileMenuOpen(false); }}
-              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+              className={`w-full flex items-center px-4 py-3 rounded-none text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === 'server'
-                  ? 'bg-slate-800 text-white shadow-xs border-l-3 border-emerald-500'
+                  ? 'bg-slate-800 text-white border-l-3 border-emerald-500'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
               }`}
             >
@@ -479,16 +461,13 @@ export default function Dashboard({ onLogout }) {
                 <Server className={`w-4 h-4 ${activeTab === 'server' ? 'text-emerald-400' : 'text-slate-400'}`} />
                 <span>Manajemen Server</span>
               </div>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-900/60 text-cyan-400 font-mono">
-                Xvfb: 6
-              </span>
             </button>
 
             <button
               onClick={() => { setActiveTab('businesses'); setMobileMenuOpen(false); }}
-              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+              className={`w-full flex items-center px-4 py-3 rounded-none text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === 'businesses'
-                  ? 'bg-slate-800 text-white shadow-xs border-l-3 border-emerald-500'
+                  ? 'bg-slate-800 text-white border-l-3 border-emerald-500'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
               }`}
             >
@@ -496,18 +475,11 @@ export default function Dashboard({ onLogout }) {
                 <Building2 className={`w-4 h-4 ${activeTab === 'businesses' ? 'text-emerald-400' : 'text-slate-400'}`} />
                 <span>Target Bisnis Maps</span>
               </div>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-900/60 text-slate-300 font-mono">
-                {businesses.length}
-              </span>
             </button>
-
-            <div className="pt-4 pb-1 px-3 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-              Monitor Visual
-            </div>
 
             <button
               onClick={() => navigate('/worker')}
-              className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all cursor-pointer group"
+              className="w-full flex items-center justify-between px-4 py-3 rounded-none text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all cursor-pointer group"
             >
               <div className="flex items-center gap-3">
                 <Monitor className="w-4 h-4 text-cyan-400 group-hover:scale-110 transition-transform" />
@@ -518,10 +490,10 @@ export default function Dashboard({ onLogout }) {
           </div>
         </div>
 
-        {/* Sidebar Footer: Server & Admin Profile */}
-        <div className="p-3 border-t border-slate-800/80 space-y-2">
+        {/* Sidebar Footer: Server & Admin Profile (No Border Radius) */}
+        <div className="p-3 border-t border-slate-800/80 space-y-2 rounded-none">
           {/* Server Uptime Indicator */}
-          <div className="bg-slate-950/60 rounded-xl p-2.5 border border-slate-800 text-slate-300 flex items-center justify-between">
+          <div className="bg-slate-950/60 rounded-none p-2.5 border border-slate-800 text-slate-300 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -533,9 +505,9 @@ export default function Dashboard({ onLogout }) {
           </div>
 
           {/* Profile Card */}
-          <div className="flex items-center justify-between px-2 py-1.5">
+          <div className="flex items-center justify-between px-2 py-1.5 rounded-none">
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold text-emerald-400 shrink-0">
+              <div className="w-8 h-8 rounded-none bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold text-emerald-400 shrink-0">
                 AD
               </div>
               <div className="min-w-0">
@@ -546,7 +518,7 @@ export default function Dashboard({ onLogout }) {
             <button
               onClick={handleLogout}
               title="Keluar"
-              className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+              className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-none transition-colors cursor-pointer"
             >
               <LogOut className="w-4 h-4" />
             </button>
