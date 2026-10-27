@@ -703,6 +703,11 @@ def api_dashboard():
             "FROM reviews"
         ).fetchone()
     inventory = db.get_autobotix_summary()
+    displays = []
+    for num in [99, 100, 101, 102, 103, 104]:
+        if os.path.exists(f"/tmp/.X11-unix/X{num}"):
+            displays.append(f":{num}")
+
     return jsonify({
         "status": "ok",
         "businesses": businesses,
@@ -710,6 +715,8 @@ def api_dashboard():
         "all_cookies": all_cookies,
         "eligible_emails": sum(1 for e in all_emails if not e.get("flagged")),
         "flagged_emails": sum(1 for e in all_emails if e.get("flagged")),
+        "active_cookies": sum(1 for c in all_cookies if c.get("status") == "active"),
+        "displays": displays,
         "queue_metrics": dict(queue_metrics or {}),
         "inventory": inventory,
         "host_metrics": _host_metrics(),

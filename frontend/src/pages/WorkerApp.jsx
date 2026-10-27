@@ -1023,6 +1023,15 @@ export default function WorkerApp({ onLogout }) {
             </div>
           </div>
 
+          <a
+            href="/dashboard"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-colors shrink-0"
+            title="Kembali ke Master Dashboard"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Master Dashboard</span>
+          </a>
+
           <div className="h-4 w-px bg-[#DCE3ED] mx-1 hidden lg:block"></div>
 
           {/* Worker Status Badge (Desktop Large/Laptop) */}

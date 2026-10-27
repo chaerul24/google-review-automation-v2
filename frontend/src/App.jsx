@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
+import Dashboard from './pages/Dashboard';
 import WorkerApp from './pages/WorkerApp';
 import { api } from './api/client';
 
@@ -25,7 +26,7 @@ export default function App() {
 
   if (!authChecked) {
     return (
-      <div className="min-h-screen bg-[#070a0f] flex items-center justify-center">
+      <div className="min-h-screen bg-[#0f172a] flex items-center justify-center">
         <div className="w-8 h-8 border-3 border-emerald-500/30 border-t-emerald-500 rounded-full animate-spin"></div>
       </div>
     );
@@ -38,9 +39,31 @@ export default function App() {
           path="/login"
           element={
             isAuthenticated ? (
-              <Navigate to="/" replace />
+              <Navigate to="/dashboard" replace />
             ) : (
               <Login onLoginSuccess={() => setIsAuthenticated(true)} />
+            )
+          }
+        />
+
+        <Route
+          path="/dashboard"
+          element={
+            isAuthenticated ? (
+              <Dashboard onLogout={() => setIsAuthenticated(false)} />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          }
+        />
+
+        <Route
+          path="/worker"
+          element={
+            isAuthenticated ? (
+              <WorkerApp onLogout={() => setIsAuthenticated(false)} />
+            ) : (
+              <Navigate to="/login" replace />
             )
           }
         />
@@ -49,7 +72,7 @@ export default function App() {
           path="/*"
           element={
             isAuthenticated ? (
-              <WorkerApp onLogout={() => setIsAuthenticated(false)} />
+              <Navigate to="/dashboard" replace />
             ) : (
               <Navigate to="/login" replace />
             )

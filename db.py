@@ -270,10 +270,13 @@ def delete_business(business_id):
 def get_all_emails():
     with get_db() as conn:
         rows = conn.execute(
-            """SELECT e.*,
+            """SELECT e.id, e.email, e.password, e.totp_secret, e.flagged, e.created_at,
+                      COALESCE(e.account_name, c.account_name, '') AS account_name,
+                      c.id AS cookie_id,
                       c.cookie_json,
                       c.status AS cookie_status,
                       c.updated_at AS cookie_updated_at,
+                      c.last_checked_at AS cookie_last_checked_at,
                       c.error_reason AS cookie_error_reason
                FROM emails e
                LEFT JOIN cookies c ON e.email = c.email

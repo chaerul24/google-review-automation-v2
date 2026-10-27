@@ -241,6 +241,14 @@ export const api = {
     return request(`/api/cookies/${id}/test`, { method: 'POST' });
   },
 
+  async checkAccountNames() {
+    return request('/api/cli/cookies/check-names', { method: 'POST' });
+  },
+
+  async getCliStatus() {
+    return request('/api/cli/status');
+  },
+
   async getCookieHealth() {
     return request('/api/cookies/health');
   },
