@@ -95,6 +95,17 @@ def get_stats() -> Dict[str, Any]:
 
 # ── UI Components ─────────────────────────────────────────────────────────────
 
+MASCOT_ART = """[bold cyan]        .::;:::::::::::::::::::::::::;:.[/bold cyan]
+[bold cyan]       :;[blue]''''   .-----------------.   [/blue]''[blue];:[/blue][/bold cyan]
+[bold cyan]      ::;[/bold cyan]    /   [bold green].---.[/bold green]     [bold green].---.[/bold green] \\    [bold cyan];::[/bold cyan]
+[bold cyan]      ::;[/bold cyan]   |   [bold green](  ●  )[/bold green] [bold yellow]:[/bold yellow] [bold green](  ●  )[/bold green] |   [bold cyan];::[/bold cyan]
+[bold cyan]      ::;[/bold cyan]   |    [bold green]'---'[/bold green] [cyan].:.[/cyan] [bold green]'---'[/bold green]  |   [bold cyan];::[/bold cyan]
+[bold cyan]      ::;[/bold cyan]   |       [magenta].:::::.[/magenta]       |   [bold cyan];::[/bold cyan]
+[bold cyan]      ::;[/bold cyan]   |      [bold yellow]'======='[/bold yellow]      |   [bold cyan];::[/bold cyan]
+[bold cyan]       ':;..[/bold cyan] \\  [dim]...............[/dim]  / [bold cyan]..;:'[/bold cyan]
+[bold cyan]         '::;:::::::::::::::::::;::'[/bold cyan]"""
+
+
 def render_banner() -> Panel:
     stats = get_stats()
     displays = get_active_displays()
@@ -104,7 +115,9 @@ def render_banner() -> Panel:
     ])
     chrom_ver = get_chromium_version()
 
-    banner_text = f"""[bold cyan]    ___         __        ____        __  _      [/bold cyan]
+    banner_text = f"""{MASCOT_ART}
+
+[bold cyan]    ___         __        ____        __  _      [/bold cyan]
 [bold cyan]   /   | __  __/ /_____  / __ )____  / /_(_)  __ [/bold cyan]
 [bold cyan]  / /| |/ / / / __/ __ \\/ __  / __ \\/ __/ / |/_/ [/bold cyan]
 [bold cyan] / ___ / /_/ / /_/ /_/ / /_/ / /_/ / /_/ />  <   [/bold cyan]
