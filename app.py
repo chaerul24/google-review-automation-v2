@@ -336,10 +336,17 @@ CLI_VERSIONS = [
         "title": "Review Queue & Auto-Update",
         "description": "Sistem Daftar Antrean Ulasan (Anti-Bot Queue), jeda alami konstan, live queue inspector, dan auto-update versioning.",
     },
+    {
+        "version": "v1.0.3",
+        "version_code": 103,
+        "release_date": "2026-10-27",
+        "title": "Strict Queue Lock & Metrics Summary",
+        "description": "Proteksi Mutex Antrean Anti-Bentrok per target, metrik Total Berhasil/Skip/Gagal/Error, dan perbaikan klik dialog Maps.",
+    },
 ]
 
-LATEST_CLI_VERSION = "v1.0.2"
-LATEST_CLI_VERSION_CODE = 102
+LATEST_CLI_VERSION = "v1.0.3"
+LATEST_CLI_VERSION_CODE = 103
 
 
 @app.route("/api/cli/version", methods=["GET"])
@@ -2900,10 +2907,6 @@ def start_bot(business_id):
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        try:
-            subprocess.run(["systemctl", "start", "google-review-worker.service"], timeout=5, check=False)
-        except Exception:
-            pass
         db.add_process_log(business_id, "Worker langsung dijalankan untuk review baru.")
     except OSError as exc:
         db.add_process_log(business_id, f"Worker tidak dapat dijalankan: {exc}", level="error")

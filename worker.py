@@ -37,6 +37,13 @@ def process_pending_jobs():
         return
 
     for biz_id in business_ids:
+        # Check if another process is actively running this business queue
+        test_lock = bot.BusinessQueueLock(biz_id)
+        if not test_lock.acquire():
+            log.info("Business %s queue is already actively processed by another worker. Skipping.", biz_id)
+            continue
+        test_lock.release()
+
         biz = db.get_business(biz_id)
         if not biz:
             log.warning("Skipping business_id=%s — missing business.", biz_id)
@@ -64,6 +71,13 @@ def process_pending_jobs():
 
 def process_business(biz_id):
     """Process one business immediately, without the scheduler polling delay."""
+    # Check if another process is actively running this business queue
+    test_lock = bot.BusinessQueueLock(biz_id)
+    if not test_lock.acquire():
+        log.warning("Business %s queue is already actively running in another worker. Skipping.", biz_id)
+        return
+    test_lock.release()
+
     biz = db.get_business(biz_id)
     if not biz:
         db.add_process_log(biz_id, "Worker tidak dapat memulai: target bisnis tidak ditemukan.", level="error")

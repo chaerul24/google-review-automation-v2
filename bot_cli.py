@@ -27,8 +27,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 # Version Tracking & Manifest
-CLI_VERSION = "v1.0.2"
-CLI_VERSION_CODE = 102
+CLI_VERSION = "v1.0.3"
+CLI_VERSION_CODE = 103
 
 # Enable ANSI colors on Windows cmd.exe
 if sys.platform == "win32":
@@ -1530,6 +1530,11 @@ def run_delete_maps_stream(
     status = "running"
     idle_count = 0
 
+    # Metrics counters for deletion
+    del_berhasil = 0
+    del_notfound = 0
+    del_gagal = 0
+
     try:
         while True:
             now = time.time()
@@ -1554,6 +1559,14 @@ def run_delete_maps_stream(
                         msg = l.get("message", "")
                         l_email = l.get("email", "")
                         l_aname = l.get("account_name", "")
+
+                        msg_low = msg.lower()
+                        if "ulasan akun berhasil dihapus" in msg_low or "berhasil dihapus dari google maps" in msg_low:
+                            del_berhasil += 1
+                        elif "tidak ditemukan ulasan" in msg_low:
+                            del_notfound += 1
+                        elif "gagal menghapus" in msg_low or "gagal mengakses profil" in msg_low:
+                            del_gagal += 1
 
                         sys.stdout.write("\r\033[K")
                         line_out = format_task_log_line(ts, lvl, msg, email=l_email, account_name=l_aname)
@@ -1590,7 +1603,8 @@ def run_delete_maps_stream(
             sp_idx += 1
             sp_char = SPINNER_FRAMES[sp_idx % len(SPINNER_FRAMES)]
             st_badge = f"{C_RED}MEMBERSIHKAN ULASAN MAPS{C_RESET}" if status == "deleting" or not clean_finished else f"{C_GREEN}SELESAI{C_RESET}"
-            sys.stdout.write(f"\r {C_CYAN}│   {sp_char}{C_RESET} {C_WHITE}Status: {st_badge} │ {C_DIM}Waktu:{C_RESET} {C_GREEN}{time_str}{C_RESET} │ {C_DIM}Tekan Ctrl+C untuk kembali{C_RESET}\033[K")
+            metrics_del = f"│ {C_GREEN}Dihapus: {del_berhasil}{C_RESET} │ {C_YELLOW}Tidak Ada: {del_notfound}{C_RESET} │ {C_RED}Gagal: {del_gagal}{C_RESET}"
+            sys.stdout.write(f"\r {C_CYAN}│   {sp_char}{C_RESET} {C_WHITE}Status: {st_badge} │ {C_DIM}Waktu:{C_RESET} {C_GREEN}{time_str}{C_RESET} {metrics_del} │ {C_DIM}Ctrl+C untuk kembali{C_RESET}\033[K")
             sys.stdout.flush()
             time.sleep(0.09)
 
@@ -1602,6 +1616,11 @@ def run_delete_maps_stream(
 
     sys.stdout.write("\r\033[K")
     elapsed = int(time.time() - start_time)
+    print(f" {C_CYAN}│{C_RESET}")
+    print(f" {C_CYAN}├── [RINGKASAN PEMBERSIHAN ULASAN GOOGLE MAPS]{C_RESET}")
+    print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Total Berhasil Dihapus{C_RESET} ────> {C_BOLD}{C_GREEN}{del_berhasil} Ulasan{C_RESET}")
+    print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Total Akun Bersih{C_RESET}      ────> {C_BOLD}{C_YELLOW}{del_notfound} Akun{C_RESET} (Tidak Ditemukan Ulasan)")
+    print(f" {C_CYAN}│   └──{C_RESET} {C_DIM}Total Gagal/Error{C_RESET}      ────> {C_BOLD}{C_RED if del_gagal > 0 else C_WHITE}{del_gagal} Akun{C_RESET}")
     print(f" {C_CYAN}│{C_RESET}")
     print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_GREEN}✓ Seluruh proses scan & hapus ulasan di Google Maps selesai dalam {elapsed} detik!{C_RESET}")
     return True
@@ -1698,6 +1717,12 @@ def run_task_stream(
     last_poll_time = 0.0
     status = "idle"
 
+    # Metrics counters (Total Berhasil, Total Skip, Total Gagal, Total Error)
+    total_berhasil = 0
+    total_skip = 0
+    total_gagal = 0
+    total_error = 0
+
     try:
         while True:
             now = time.time()
@@ -1723,12 +1748,23 @@ def run_task_stream(
                         l_email = l.get("email", "")
                         l_aname = l.get("account_name", "")
 
+                        # Tally metrics
+                        msg_low = msg.lower()
+                        if "ulasan bintang" in msg_low and "berhasil dikirim" in msg_low:
+                            total_berhasil += 1
+                        elif "skip: komentar/ulasan dari akun ini sudah ada" in msg_low:
+                            total_skip += 1
+                        elif "proses gagal" in msg_low or "gagal mengakses profil" in msg_low:
+                            total_gagal += 1
+                        elif lvl in ("error", "fatal"):
+                            total_error += 1
+
                         # Clear spinner line and print log branch
                         sys.stdout.write("\r\033[K")
                         line_out = format_task_log_line(ts, lvl, msg, email=l_email, account_name=l_aname)
                         print(line_out)
 
-                        if "Worker selesai memproses" in msg:
+                        if "Worker selesai memproses" in msg or "seluruh antrean ulasan selesai" in msg_low:
                             task_finished = True
 
                     if task_finished and status == "idle":
@@ -1741,6 +1777,15 @@ def run_task_stream(
                                     lvl = (l.get("level") or "info").lower()
                                     ts = l.get("created_at", "").split()[-1]
                                     msg = l.get("message", "")
+                                    msg_low = msg.lower()
+                                    if "ulasan bintang" in msg_low and "berhasil dikirim" in msg_low:
+                                        total_berhasil += 1
+                                    elif "skip: komentar/ulasan dari akun ini sudah ada" in msg_low:
+                                        total_skip += 1
+                                    elif "proses gagal" in msg_low or "gagal mengakses profil" in msg_low:
+                                        total_gagal += 1
+                                    elif lvl in ("error", "fatal"):
+                                        total_error += 1
                                     sys.stdout.write("\r\033[K")
                                     print(format_task_log_line(ts, lvl, msg, email=l.get("email", ""), account_name=l.get("account_name", "")))
                         except Exception:
@@ -1749,7 +1794,7 @@ def run_task_stream(
                 except Exception:
                     pass
 
-            # Animate spinner on current bottom line (connected to tree trunk)
+            # Animate spinner on current bottom line (connected to tree trunk) with live metrics
             sp_idx += 1
             sp_char = SPINNER_FRAMES[sp_idx % len(SPINNER_FRAMES)]
             if status in ("running", "reviewing"):
@@ -1758,7 +1803,9 @@ def run_task_stream(
                 st_badge = f"{C_YELLOW}JEDA ANTREAN{C_RESET}"
             else:
                 st_badge = f"{C_CYAN}{status.upper()}{C_RESET}"
-            sys.stdout.write(f"\r {C_CYAN}│   {sp_char}{C_RESET} {C_WHITE}Status: {st_badge} │ {C_DIM}Waktu:{C_RESET} {C_GREEN}{time_str}{C_RESET} │ {C_DIM}Tekan Ctrl+C untuk kembali{C_RESET}\033[K")
+
+            metrics_bar = f"│ {C_GREEN}Berhasil: {total_berhasil}{C_RESET} │ {C_YELLOW}Skip: {total_skip}{C_RESET} │ {C_RED}Gagal: {total_gagal}{C_RESET}"
+            sys.stdout.write(f"\r {C_CYAN}│   {sp_char}{C_RESET} {C_WHITE}Status: {st_badge} │ {C_DIM}Waktu:{C_RESET} {C_GREEN}{time_str}{C_RESET} {metrics_bar} │ {C_DIM}Ctrl+C untuk kembali{C_RESET}\033[K")
             sys.stdout.flush()
             time.sleep(0.09)
 
@@ -1771,7 +1818,13 @@ def run_task_stream(
     sys.stdout.write("\r\033[K")
     elapsed = int(time.time() - start_time)
     print(f" {C_CYAN}│{C_RESET}")
-    print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_GREEN}✓ Seluruh proses ulasan selesai dalam {elapsed} detik!{C_RESET}")
+    print(f" {C_CYAN}├── [RINGKASAN HASIL EKSEKUSI TUGAS ULASAN]{C_RESET}")
+    print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Total Berhasil{C_RESET} ────> {C_BOLD}{C_GREEN}{total_berhasil} Akun{C_RESET} (Ulasan Sukses Terbit ⭐)")
+    print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Total Dilewati{C_RESET} ────> {C_BOLD}{C_YELLOW}{total_skip} Akun{C_RESET} (Komentar Sudah Ada di Maps ⏭️)")
+    print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Total Gagal{C_RESET}    ────> {C_BOLD}{C_RED if total_gagal > 0 else C_WHITE}{total_gagal} Akun{C_RESET}")
+    print(f" {C_CYAN}│   └──{C_RESET} {C_DIM}Total Error{C_RESET}    ────> {C_BOLD}{C_RED if total_error > 0 else C_WHITE}{total_error} Kendala Teknis{C_RESET}")
+    print(f" {C_CYAN}│{C_RESET}")
+    print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_GREEN}✓ Seluruh proses antrean ulasan selesai dalam {elapsed} detik!{C_RESET}")
     return True
 
 

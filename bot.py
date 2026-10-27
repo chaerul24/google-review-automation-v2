@@ -9,6 +9,7 @@ import concurrent.futures
 import multiprocessing
 import requests
 
+import fcntl
 import pyotp
 
 from dotenv import load_dotenv
@@ -650,9 +651,36 @@ def post_review(
         """)
         sb.sleep(random.uniform(3, 5))
 
-        # Click Done (also inside the iframe)
-        sb.nested_click(iframe_sel, 'button[aria-label="Done"]')
-        sb.sleep(random.uniform(3, 5))
+        # Click Done / Selesai (also inside the iframe if present) safely
+        try:
+            sb.evaluate("""
+                var iframe = document.querySelector("iframe[name='goog-reviews-write-widget']");
+                if (iframe) {
+                    var doc = iframe.contentDocument || iframe.contentWindow.document;
+                    if (doc) {
+                        var buttons = doc.querySelectorAll('button');
+                        for (var btn of buttons) {
+                            var txt = (btn.textContent || '').trim().toLowerCase();
+                            var aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+                            if (txt === 'done' || txt === 'selesai' || aria === 'done' || aria === 'selesai') {
+                                btn.click();
+                                break;
+                            }
+                        }
+                    }
+                }
+            """)
+        except Exception:
+            pass
+
+        try:
+            done_btn = sb.get_nested_element(iframe_sel, 'button[aria-label="Done"], button[aria-label="Selesai"]')
+            if done_btn:
+                done_btn.click()
+        except Exception:
+            pass
+
+        sb.sleep(random.uniform(2, 4))
         db.update_review_status(email_id, "reviewed", review_text, star_rating)
         log.info("Review posted successfully for %s", email)
         db.add_process_log(business_id, f"[{email}] Review ulasan berhasil dikirim ke Google Maps.", email_id, "success")
@@ -944,100 +972,156 @@ def delete_own_review_on_maps(email, maps_url, business_name, email_id=None, bus
         lock.release()
 
 
-def run_reviews(business_id, biz, config, delay=60, max_parallel=6):
+class BusinessQueueLock:
+    """Non-blocking cross-process flock lock preventing multiple workers from handling the same business simultaneously."""
+
+    def __init__(self, business_id: int):
+        self.business_id = business_id
+        self.lock_path = f"/tmp/autobotix_biz_queue_{business_id}.lock"
+        self._fd = None
+
+    def acquire(self) -> bool:
+        if os.name == "nt":
+            return True
+        try:
+            self._fd = open(self.lock_path, "a+")
+            fcntl.flock(self._fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._fd.seek(0)
+            self._fd.truncate()
+            self._fd.write(f"pid={os.getpid()}\ntime={time.time()}\n")
+            self._fd.flush()
+            return True
+        except (BlockingIOError, OSError):
+            if self._fd:
+                try:
+                    self._fd.close()
+                except Exception:
+                    pass
+            self._fd = None
+            return False
+
+    def release(self):
+        if self._fd and os.name != "nt":
+            try:
+                fcntl.flock(self._fd.fileno(), fcntl.LOCK_UN)
+                self._fd.close()
+            except Exception:
+                pass
+            self._fd = None
+
+
+def run_reviews(business_id, biz, config, delay=60, max_parallel=6, _active_lock=None):
     pending = db.get_pending_reviews(business_id)
     if not pending:
         return
 
-    def execute_slot_job(slot_idx, review_row, total_slots=1):
-        slot_display = SLOT_DISPLAYS.get(slot_idx, f":{99 + slot_idx}")
-        slot_display = ensure_virtual_display(slot_display)
-        db.init_db()
+    # Cross-process mutual exclusion: Ensure ONLY ONE worker process runs this business queue at a time
+    lock = _active_lock
+    if lock is None:
+        lock = BusinessQueueLock(business_id)
+        if not lock.acquire():
+            log.warning("Business #%s queue is already actively processed by another worker. Skipping duplicate run.", business_id)
+            return
 
-        star = review_row["star_rating"] or 5
-        email = review_row["email"]
+    try:
+        def execute_slot_job(slot_idx, review_row, total_slots=1):
+            slot_display = SLOT_DISPLAYS.get(slot_idx, f":{99 + slot_idx}")
+            slot_display = ensure_virtual_display(slot_display)
+            db.init_db()
 
-        db.update_review_status(review_row["id"], "reviewing", None, star)
+            star = review_row["star_rating"] or 5
+            email = review_row["email"]
 
-        # Pure Native Chromium Engine on Linux Virtual Display
-        os.environ["DISPLAY"] = slot_display
-        db.add_process_log(
-            business_id,
-            f"[{email}] Menjalankan browser Chromium di Display {slot_display} (Slot {slot_idx + 1}/{total_slots}).",
-            review_row["id"],
-        )
-        success = post_review(
-            email,
-            review_row["password"],
-            biz["url"],
-            star,
-            biz["name"],
-            config.get("business_description", ""),
-            review_row["id"],
-            business_id,
-            review_type=review_row.get("review_type") or "medium",
-            language=review_row.get("review_language") or "English",
-            review_style=config.get("review_style") or "random",
-            totp_secret=review_row.get("totp_secret"),
-            slot_index=slot_idx,
-            total_slots=total_slots,
-            display=slot_display,
-            gemini_token=config.get("gemini_token"),
-            business_category=config.get("business_category"),
-        )
-        if success == "skipped":
-            # Ulasan akun sudah ada di Google Maps dan berhasil diskip
-            return True
-        elif success:
-            db.update_review_status(review_row["id"], "reviewed", None, star)
+            db.update_review_status(review_row["id"], "reviewing", None, star)
+
+            # Pure Native Chromium Engine on Linux Virtual Display
+            os.environ["DISPLAY"] = slot_display
             db.add_process_log(
                 business_id,
-                f"[{email}] Ulasan bintang {star} berhasil dikirim oleh browser Chromium di Display {slot_display}.",
+                f"[{email}] Menjalankan browser Chromium di Display {slot_display} (Slot {slot_idx + 1}/{total_slots}).",
                 review_row["id"],
-                level="success",
             )
-        else:
-            db.increment_email_fail_count(review_row["email_id"])
-        return bool(success)
-
-    parallel_count = min(len(pending), max_parallel)
-    if parallel_count > 1:
-        db.add_process_log(
-            business_id,
-            f"Memulai eksekusi paralel ({parallel_count} browser Chromium berjalan serentak di Display virtual).",
-        )
-
-        batch = pending[:parallel_count]
-        processes = []
-        for i, row in enumerate(batch):
-            p = multiprocessing.Process(
-                target=execute_slot_job,
-                args=(i, row, parallel_count),
+            success = post_review(
+                email,
+                review_row["password"],
+                biz["url"],
+                star,
+                biz["name"],
+                config.get("business_description", ""),
+                review_row["id"],
+                business_id,
+                review_type=review_row.get("review_type") or "medium",
+                language=review_row.get("review_language") or "English",
+                review_style=config.get("review_style") or "random",
+                totp_secret=review_row.get("totp_secret"),
+                slot_index=slot_idx,
+                total_slots=total_slots,
+                display=slot_display,
+                gemini_token=config.get("gemini_token"),
+                business_category=config.get("business_category"),
             )
-            processes.append(p)
-            p.start()
+            if success == "skipped":
+                # Ulasan akun sudah ada di Google Maps dan berhasil diskip
+                return True
+            elif success:
+                db.update_review_status(review_row["id"], "reviewed", None, star)
+                db.add_process_log(
+                    business_id,
+                    f"[{email}] Ulasan bintang {star} berhasil dikirim oleh browser Chromium di Display {slot_display}.",
+                    review_row["id"],
+                    level="success",
+                )
+            else:
+                db.increment_email_fail_count(review_row["email_id"])
+            return bool(success)
 
-        for p in processes:
-            p.join()
-
-        remaining = db.get_pending_reviews(business_id)
-        if remaining:
-            actual_delay = max(5, int(delay))
-            db.add_process_log(business_id, f"Menunggu {actual_delay} detik sebelum batch paralel berikutnya.")
-            time.sleep(actual_delay)
-            run_reviews(business_id, biz, config, delay=delay, max_parallel=max_parallel)
-    else:
-        review_row = pending[0]
-        execute_slot_job(0, review_row, 1)
-
-        remaining = db.get_pending_reviews(business_id)
-        if remaining:
-            actual_delay = max(10, int(delay))
-            next_acc = remaining[0].get("email", "akun berikutnya")
+        parallel_count = min(len(pending), max_parallel)
+        if parallel_count > 1:
             db.add_process_log(
                 business_id,
-                f"⏳ [JEDA ANTREAN ANTI-BOT] Menunggu jeda alami {actual_delay} detik sebelum akun antrean berikutnya ({next_acc}) masuk...",
-                level="info",
+                f"Memulai eksekusi paralel ({parallel_count} browser Chromium berjalan serentak di Display virtual).",
             )
-            time.sleep(actual_delay)
-            run_reviews(business_id, biz, config, delay=delay, max_parallel=max_parallel)
+
+            batch = pending[:parallel_count]
+            processes = []
+            for i, row in enumerate(batch):
+                p = multiprocessing.Process(
+                    target=execute_slot_job,
+                    args=(i, row, parallel_count),
+                )
+                processes.append(p)
+                p.start()
+
+            for p in processes:
+                p.join()
+
+            remaining = db.get_pending_reviews(business_id)
+            if remaining:
+                actual_delay = max(5, int(delay))
+                db.add_process_log(business_id, f"Menunggu {actual_delay} detik sebelum batch paralel berikutnya.")
+                time.sleep(actual_delay)
+                run_reviews(business_id, biz, config, delay=delay, max_parallel=max_parallel, _active_lock=lock)
+        else:
+            review_row = pending[0]
+            execute_slot_job(0, review_row, 1)
+
+            remaining = db.get_pending_reviews(business_id)
+            if remaining:
+                actual_delay = max(10, int(delay))
+                next_acc = remaining[0].get("email", "akun berikutnya")
+                db.add_process_log(
+                    business_id,
+                    f"⏳ [JEDA ANTREAN ANTI-BOT] Menunggu jeda alami {actual_delay} detik sebelum akun antrean berikutnya ({next_acc}) masuk...",
+                    level="info",
+                )
+                time.sleep(actual_delay)
+                run_reviews(business_id, biz, config, delay=delay, max_parallel=max_parallel, _active_lock=lock)
+            else:
+                db.add_process_log(
+                    business_id,
+                    f"✓ Seluruh antrean ulasan selesai diproses untuk '{biz.get('name', business_id)}'.",
+                    level="success",
+                )
+    finally:
+        if _active_lock is None and lock is not None:
+            lock.release()
