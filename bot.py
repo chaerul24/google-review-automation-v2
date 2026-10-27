@@ -444,6 +444,83 @@ def post_review(
             except Exception:
                 pass
 
+        # ── Step: Cek apakah akun ini sudah pernah berkomentar/mengulas di Google Maps target ──
+        db.add_process_log(business_id, f"[{email}] Memeriksa apakah akun sudah memiliki komentar/ulasan di Google Maps target...", email_id)
+        has_existing_review = False
+        existing_snippet = ""
+
+        check_existing_script = """(() => {
+            const body = document.body ? document.body.innerText : '';
+            const markers = ['Your review', 'Your Review', 'Ulasan Anda', 'Your rating', 'Edit your review', 'Edit ulasan', 'Ulasan saya'];
+            let foundMarker = markers.find(m => body.includes(m));
+
+            // Cek tombol edit ulasan atau tombol tindakan ulasan milik akun sendiri
+            const editBtn = document.querySelector(
+                'button[aria-label*="Edit your review"], ' +
+                'button[aria-label*="Edit ulasan"], ' +
+                'button[aria-label*="Tindakan untuk ulasan"], ' +
+                'button[aria-label*="Action for review"], ' +
+                'button[data-tooltip*="Edit ulasan"], ' +
+                'button[data-tooltip*="Edit your review"]'
+            );
+
+            let snippet = '';
+            if (foundMarker || editBtn) {
+                const headings = Array.from(document.querySelectorAll('div, h2, h3, span')).filter(el => {
+                    const t = (el.innerText || '').trim();
+                    return t === 'Ulasan Anda' || t === 'Your review' || t === 'Your rating';
+                });
+                for (const h of headings) {
+                    let parent = h.parentElement;
+                    for (let i = 0; i < 4 && parent; i++) {
+                        const txt = (parent.innerText || '').replace(h.innerText, '').trim();
+                        if (txt.length > 5) {
+                            snippet = txt.substring(0, 120);
+                            break;
+                        }
+                        parent = parent.parentElement;
+                    }
+                    if (snippet) break;
+                }
+                return { exists: true, marker: foundMarker || (editBtn ? 'edit-button' : 'detected'), snippet: snippet };
+            }
+            return { exists: false };
+        })()"""
+
+        check_res = sb.execute_script(check_existing_script) or {}
+        if check_res.get("exists"):
+            has_existing_review = True
+            existing_snippet = check_res.get("snippet", "")
+
+        # Jika belum terdeteksi di tab overview, buka tab Ulasan (Reviews) untuk pemeriksaan menyeluruh
+        if not has_existing_review:
+            for rev_tab in [
+                'button[aria-label*="Reviews"]',
+                'button[aria-label*="Ulasan"]',
+                'button[role="tab"][data-tab-index="1"]',
+                'div[role="tablist"] button:nth-child(2)'
+            ]:
+                try:
+                    if sb.is_element_visible(rev_tab):
+                        sb.click(rev_tab)
+                        sb.sleep(random.uniform(3, 4))
+                        break
+                except Exception:
+                    pass
+            check_res_tab = sb.execute_script(check_existing_script) or {}
+            if check_res_tab.get("exists"):
+                has_existing_review = True
+                existing_snippet = check_res_tab.get("snippet", "")
+
+        if has_existing_review:
+            snip_msg = f" (Cuplikan: \"{existing_snippet[:50]}...\")" if existing_snippet else ""
+            skip_msg = f"[{email}] ⏭️ SKIP: Komentar/ulasan dari akun ini sudah ada di Google Maps{snip_msg}. Melewati tugas."
+            log.info(skip_msg)
+            db.add_process_log(business_id, skip_msg, email_id, "warning")
+            # Update status review di database sebagai reviewed agar tercatat sinkron
+            db.update_review_status(email_id, "reviewed", existing_snippet or "[Ulasan sudah terbit di Google Maps]", star_rating)
+            return "skipped"
+
         # Try to click "Write a review" directly or open Reviews tab first
         write_clicked = False
         for wr_sel in [
@@ -872,7 +949,10 @@ def run_reviews(business_id, biz, config, delay=60, max_parallel=6):
             gemini_token=config.get("gemini_token"),
             business_category=config.get("business_category"),
         )
-        if success:
+        if success == "skipped":
+            # Ulasan akun sudah ada di Google Maps dan berhasil diskip
+            return True
+        elif success:
             db.update_review_status(review_row["id"], "reviewed", None, star)
             db.add_process_log(
                 business_id,
@@ -882,7 +962,7 @@ def run_reviews(business_id, biz, config, delay=60, max_parallel=6):
             )
         else:
             db.increment_email_fail_count(review_row["email_id"])
-        return success
+        return bool(success)
 
     parallel_count = min(len(pending), max_parallel)
     if parallel_count > 1:
