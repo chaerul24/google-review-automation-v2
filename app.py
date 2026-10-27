@@ -1534,9 +1534,19 @@ def process_log(business_id):
     reviews = db.get_reviews_for_business(business_id)
     has_active = any(row["status"] == "reviewing" for row in reviews)
     has_pending = any(row["status"] == "pending" for row in reviews)
-    status_label = "reviewing" if has_active else ("queued" if has_pending else "idle")
+    is_deleting = business_id in _ACTIVE_DELETE_TASKS
+    if is_deleting:
+        status_label = "deleting"
+    elif has_active:
+        status_label = "reviewing"
+    elif has_pending:
+        status_label = "queued"
+    else:
+        status_label = "idle"
+
     return jsonify({
         "status": status_label,
+        "is_deleting": is_deleting,
         "logs": db.get_process_logs(business_id),
     })
 
@@ -3019,7 +3029,18 @@ def dark_mode_delete_maps_reviews(business_id):
     def run_async_delete(targs):
         try:
             _ACTIVE_DELETE_TASKS.add(business_id)
+            db.add_process_log(
+                business_id,
+                f"Memulai pembersihan ulasan Google Maps untuk {len(targs)} akun bot secara berurutan...",
+                level="info"
+            )
             for idx, row in enumerate(targs):
+                db.add_process_log(
+                    business_id,
+                    f"[{row['email']}] [Akun {idx+1}/{len(targs)}] Memulai scan & hapus ulasan di Google Maps...",
+                    row.get("email_id"),
+                    level="info"
+                )
                 bot.delete_own_review_on_maps(
                     email=row["email"],
                     maps_url=biz["url"],
@@ -3029,6 +3050,11 @@ def dark_mode_delete_maps_reviews(business_id):
                     slot_index=idx % 6,
                 )
                 time.sleep(2)
+            db.add_process_log(
+                business_id,
+                f"Pembersihan ulasan Google Maps selesai untuk seluruh ({len(targs)}) akun bot.",
+                level="success"
+            )
         finally:
             _ACTIVE_DELETE_TASKS.discard(business_id)
 

@@ -1377,28 +1377,35 @@ def handle_remove_review_menu(client: ServerClient, status_info: Dict[str, Any])
         if scope_c == "1":
             confirm = input(f"\n {C_BOLD}{C_RED}Luncurkan bot Chromium untuk SCAN & HAPUS ulasan dari SEMUA akun bot terdaftar di Maps? [y/N]: {C_RESET}").strip().lower()
             if confirm in ("y", "yes"):
-                spin = Spinner("Meluncurkan worker Chromium untuk SEMUA akun di Google Maps...")
-                spin.start()
-                try:
-                    res = client.delete_maps_reviews_live(bid, all_accounts=True)
-                    spin.stop(f"\n {C_GREEN}✓ {res.get('message', 'Pembersihan ulasan di Google Maps dimulai untuk semua akun.')}{C_RESET}")
-                except Exception as exc:
-                    spin.stop()
-                    print(f"\n {C_RED}✖ Gagal meluncurkan: {exc}{C_RESET}")
+                all_accs = status_info.get("accounts", [])
+                if not all_accs:
+                    try:
+                        all_accs = client.get_status().get("accounts", [])
+                    except Exception:
+                        pass
+                run_delete_maps_stream(
+                    client,
+                    bid,
+                    business_name=biz_name,
+                    scope_label=f"Semua Akun Master ({len(all_accs)} Akun Terdaftar)",
+                    all_accounts=True,
+                    target_accounts=all_accs,
+                )
         elif scope_c == "2":
             if reviewed_count == 0:
                 print(f"\n {C_YELLOW}Tidak ada record ulasan berstatus 'reviewed' di database untuk bisnis ini.{C_RESET}")
             else:
                 confirm = input(f"\n {C_BOLD}{C_RED}Luncurkan bot Chromium untuk HAPUS {reviewed_count} ulasan terbit di Maps? [y/N]: {C_RESET}").strip().lower()
                 if confirm in ("y", "yes"):
-                    spin = Spinner("Meluncurkan worker Chromium...")
-                    spin.start()
-                    try:
-                        res = client.delete_maps_reviews_live(bid)
-                        spin.stop(f"\n {C_GREEN}✓ {res.get('message')}{C_RESET}")
-                    except Exception as exc:
-                        spin.stop()
-                        print(f"\n {C_RED}✖ Gagal: {exc}{C_RESET}")
+                    rev_accs = [r for r in reviews if r.get("status") in ("reviewed", "posted")]
+                    run_delete_maps_stream(
+                        client,
+                        bid,
+                        business_name=biz_name,
+                        scope_label=f"Hanya Akun Review Terbit ({len(rev_accs)} Akun)",
+                        all_accounts=False,
+                        target_accounts=rev_accs,
+                    )
         elif scope_c == "3":
             all_emails = status_info.get("emails", [])
             if not all_emails:
@@ -1412,14 +1419,16 @@ def handle_remove_review_menu(client: ServerClient, status_info: Dict[str, Any])
                     print(f" {C_BOLD}#{em.get('id')}{C_RESET}: {C_WHITE}{em.get('email')}{C_RESET}")
             eid_in = input(f"\n {C_GREEN}Masukkan ID Akun Email yang ingin dihapus ulasannya di Maps: {C_RESET}").strip()
             if eid_in.isdigit():
-                spin = Spinner(f"Meluncurkan penghapusan ulasan untuk Akun ID {eid_in}...")
-                spin.start()
-                try:
-                    res = client.delete_maps_reviews_live(bid, email_id=int(eid_in))
-                    spin.stop(f"\n {C_GREEN}✓ {res.get('message')}{C_RESET}")
-                except Exception as exc:
-                    spin.stop()
-                    print(f"\n {C_RED}✖ Gagal: {exc}{C_RESET}")
+                sel_acc = next((e for e in all_emails if e.get("id") == int(eid_in)), {"id": int(eid_in), "email": f"ID #{eid_in}"})
+                run_delete_maps_stream(
+                    client,
+                    bid,
+                    business_name=biz_name,
+                    scope_label=f"Akun Tunggal ({sel_acc.get('email')})",
+                    email_id=int(eid_in),
+                    all_accounts=False,
+                    target_accounts=[sel_acc],
+                )
         input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
 
 
@@ -1461,6 +1470,141 @@ def format_task_log_line(ts: str, lvl: str, msg: str, email: str = "", account_n
         msg_out = f"{C_WHITE}{clean_msg}{C_RESET}"
 
     return f" {C_CYAN}│   ├──{C_RESET} {C_DIM}{ts}{C_RESET} {arrow} {actor_badge} {arrow} {msg_out}"
+
+
+def run_delete_maps_stream(
+    client: ServerClient,
+    business_id: int,
+    business_name: str = "",
+    scope_label: str = "Semua Akun Master",
+    email_id: Optional[int] = None,
+    all_accounts: bool = False,
+    target_accounts: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
+    """Stream live Chromium scan & delete logs with unified tree lines and real-time status."""
+    print()
+    print(f" {C_CYAN}┌── [1/2] PERSIAPAN SCAN & HAPUS ULASAN GOOGLE MAPS{C_RESET}")
+    biz_label = business_name if business_name else f"Bisnis #{business_id}"
+    print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Target Bisnis{C_RESET}   ──────> {C_WHITE}{biz_label}{C_RESET}")
+    print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Cakupan Target{C_RESET}  ─────> {C_YELLOW}{scope_label}{C_RESET}")
+    print(f" {C_CYAN}│   └──{C_RESET} {C_DIM}Metode Aksi{C_RESET}     ─────> {C_RED}Live Chromium CDP (Hapus Ulasan Publik Sendiri){C_RESET}")
+    print(f" {C_CYAN}│{C_RESET}")
+
+    if target_accounts:
+        print(f" {C_CYAN}├── [DAFTAR AKUN TARGET SCAN & CLEAN]{C_RESET}")
+        for s_idx, acc in enumerate(target_accounts):
+            is_last = (s_idx == len(target_accounts) - 1)
+            sub_branch = "└──" if is_last else "├──"
+            aemail = acc.get("email", "")
+            aname = (acc.get("account_name") or "").strip()
+            lbl = f"{aname} ({aemail})" if aname and aname != aemail else aemail
+            disp = f":{99 + (s_idx % 6)}"
+            print(f" {C_CYAN}│   {sub_branch}{C_RESET} [Slot {s_idx + 1}] Display {disp} ──> {C_WHITE}{lbl}{C_RESET} ──> {C_GREEN}[SIAP SCAN]{C_RESET}")
+            time.sleep(0.03)
+        print(f" {C_CYAN}│{C_RESET}")
+
+    print(f" {C_CYAN}├── [PENGIRIMAN PERINTAH KE SERVER]{C_RESET}")
+    spin = Spinner("Mengirim instruksi hapus ulasan Maps ke server AutoBotix...")
+    spin.start()
+    try:
+        res = client.delete_maps_reviews_live(business_id, email_id=email_id, all_accounts=all_accounts)
+        t_count = res.get("target_count", len(target_accounts or []))
+        spin.stop(f" {C_CYAN}│   └──{C_RESET} Dispatch API ───────> {C_BOLD}{C_GREEN}[BERHASIL DILUNCURKAN 🚀]{C_RESET} ({t_count} Akun dalam Antrean Scan)")
+    except Exception as exc:
+        spin.stop()
+        print(f" {C_CYAN}│   └──{C_RESET} Dispatch API ───────> {C_BOLD}{C_RED}[GAGAL: {exc}]{C_RESET}")
+        print(f" {C_CYAN}│{C_RESET}")
+        print(f" {C_CYAN}└──{C_RESET} {C_RED}Proses pembersihan ulasan dibatalkan.{C_RESET}")
+        return False
+
+    print(f" {C_CYAN}│{C_RESET}")
+    print(f" {C_CYAN}├── [2/2] LIVE PROCESS LOGS (SERVER CHROMIUM SCAN & CLEAN){C_RESET}")
+    print(f" {C_CYAN}│   {C_DIM}Memantau alur pembersihan ulasan Maps secara live... (Tekan Ctrl+C untuk kembali){C_RESET}")
+    print(f" {C_CYAN}│{C_RESET}")
+
+    seen_ids = set()
+    start_time = time.time()
+    clean_finished = False
+    sp_idx = 0
+    last_poll_time = 0.0
+    status = "running"
+    idle_count = 0
+
+    try:
+        while True:
+            now = time.time()
+            elapsed_sec = int(now - start_time)
+            mins = elapsed_sec // 60
+            secs = elapsed_sec % 60
+            time_str = f"{mins:02d}:{secs:02d}s"
+
+            if now - last_poll_time >= 0.8:
+                last_poll_time = now
+                try:
+                    log_data = client.get_logs(business_id)
+                    logs = log_data.get("logs", [])
+                    status = log_data.get("status", "idle")
+                    is_del = log_data.get("is_deleting", False)
+
+                    new_logs = [l for l in logs if l["id"] not in seen_ids]
+                    for l in new_logs:
+                        seen_ids.add(l["id"])
+                        lvl = (l.get("level") or "info").lower()
+                        ts = l.get("created_at", "").split()[-1]
+                        msg = l.get("message", "")
+                        l_email = l.get("email", "")
+                        l_aname = l.get("account_name", "")
+
+                        sys.stdout.write("\r\033[K")
+                        line_out = format_task_log_line(ts, lvl, msg, email=l_email, account_name=l_aname)
+                        print(line_out)
+
+                        if "Pembersihan ulasan Google Maps selesai" in msg or "selesai untuk seluruh" in msg:
+                            clean_finished = True
+
+                    if not is_del and clean_finished:
+                        idle_count += 1
+                        if idle_count >= 2:
+                            time.sleep(1.0)
+                            try:
+                                final_data = client.get_logs(business_id)
+                                for l in final_data.get("logs", []):
+                                    if l["id"] not in seen_ids:
+                                        seen_ids.add(l["id"])
+                                        lvl = (l.get("level") or "info").lower()
+                                        ts = l.get("created_at", "").split()[-1]
+                                        sys.stdout.write("\r\033[K")
+                                        print(format_task_log_line(ts, lvl, l.get("message", ""), email=l.get("email", ""), account_name=l.get("account_name", "")))
+                            except Exception:
+                                pass
+                            break
+                    elif not is_del and not new_logs and elapsed_sec > 8:
+                        idle_count += 1
+                        if idle_count >= 4:
+                            break
+                    else:
+                        idle_count = 0
+                except Exception:
+                    pass
+
+            sp_idx += 1
+            sp_char = SPINNER_FRAMES[sp_idx % len(SPINNER_FRAMES)]
+            st_badge = f"{C_RED}MEMBERSIHKAN ULASAN MAPS{C_RESET}" if status == "deleting" or not clean_finished else f"{C_GREEN}SELESAI{C_RESET}"
+            sys.stdout.write(f"\r {C_CYAN}│   {sp_char}{C_RESET} {C_WHITE}Status: {st_badge} │ {C_DIM}Waktu:{C_RESET} {C_GREEN}{time_str}{C_RESET} │ {C_DIM}Tekan Ctrl+C untuk kembali{C_RESET}\033[K")
+            sys.stdout.flush()
+            time.sleep(0.09)
+
+    except KeyboardInterrupt:
+        sys.stdout.write("\r\033[K")
+        print(f" {C_CYAN}│{C_RESET}")
+        print(f" {C_CYAN}└──{C_RESET} {C_YELLOW}! Pemantauan live dihentikan oleh user. Pembersihan ulasan tetap berjalan di server.{C_RESET}")
+        return True
+
+    sys.stdout.write("\r\033[K")
+    elapsed = int(time.time() - start_time)
+    print(f" {C_CYAN}│{C_RESET}")
+    print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_GREEN}✓ Seluruh proses scan & hapus ulasan di Google Maps selesai dalam {elapsed} detik!{C_RESET}")
+    return True
 
 
 def run_task_stream(
@@ -2003,8 +2147,12 @@ def main():
             run_task_stream(client, args.business, count=args.slots, star_rating=args.stars, mode=args.mode, delay=args.delay)
         elif args.command == "review-del":
             if args.maps:
-                res = client.delete_maps_reviews_live(args.business, all_accounts=args.all_accounts)
-                print(f"{C_GREEN}✓ {res.get('message', 'Worker Chromium diluncurkan untuk menghapus ulasan di Google Maps.')}{C_RESET}")
+                run_delete_maps_stream(
+                    client,
+                    args.business,
+                    scope_label="Semua Akun Master" if args.all_accounts else "Akun Review Terbit",
+                    all_accounts=args.all_accounts,
+                )
             elif args.review_id:
                 res = client.delete_single_review(args.business, args.review_id)
                 print(f"{C_GREEN}✓ Review #{args.review_id} berhasil dihapus dari database.{C_RESET}")
