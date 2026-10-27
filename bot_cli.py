@@ -223,6 +223,25 @@ class ServerClient:
     def clear_logs(self, business_id: int) -> Dict[str, Any]:
         return self._request(f"/api/businesses/{business_id}/clear-logs", method="POST")
 
+    def get_business_detail(self, business_id: int) -> Dict[str, Any]:
+        """Fetch details and review list for a business."""
+        return self._request(f"/api/businesses/{business_id}")
+
+    def delete_single_review(self, business_id: int, review_id: int) -> Dict[str, Any]:
+        """Delete an individual review by ID."""
+        return self._request(f"/api/businesses/{business_id}/delete-review/{review_id}", method="POST")
+
+    def delete_all_reviews(self, business_id: int) -> Dict[str, Any]:
+        """Delete all reviews and queue logs for a business in database."""
+        return self._request(f"/api/businesses/{business_id}/dark-mode/delete-comments", method="POST")
+
+    def delete_maps_reviews_live(self, business_id: int, email_id: Optional[int] = None) -> Dict[str, Any]:
+        """Delete own posted reviews directly on Google Maps via live Chromium bot."""
+        payload = {}
+        if email_id:
+            payload["email_id"] = email_id
+        return self._request(f"/api/businesses/{business_id}/dark-mode/delete-maps-reviews", method="POST", data=payload)
+
 
 # ── UI Helpers & Animation ───────────────────────────────────────────────────
 
@@ -803,6 +822,161 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
                 time.sleep(2)
 
 
+# ── Remove Review Handler ─────────────────────────────────────────────────────
+
+def handle_remove_review_menu(client: ServerClient, status_info: Dict[str, Any]):
+    """Interactive handler for removing reviews (database deletion or live Google Maps deletion)."""
+    os.system("cls" if os.name == "nt" else "clear")
+    print_banner(client, status_info)
+
+    businesses = status_info.get("businesses", [])
+    if not businesses:
+        try:
+            cur = client.get_status()
+            businesses = cur.get("businesses", [])
+        except Exception:
+            pass
+
+    box_header("MENU HAPUS / REMOVE ULASAN (REVIEW CLEANER)")
+    print()
+    print_businesses(businesses)
+
+    if not businesses:
+        print(f" {C_YELLOW}Belum ada target bisnis Google Maps terdaftar.{C_RESET}")
+        input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+        return
+
+    try:
+        bid_in = input(f"\n {C_GREEN}Masukkan ID Bisnis target yang ingin dihapus ulasannya (0 untuk batal): {C_RESET}").strip()
+    except (KeyboardInterrupt, EOFError):
+        return
+
+    if not bid_in or bid_in == "0" or not bid_in.isdigit():
+        return
+
+    bid = int(bid_in)
+    target_biz = next((b for b in businesses if b.get("id") == bid), None)
+    biz_name = target_biz.get("name", f"Bisnis #{bid}") if target_biz else f"Bisnis #{bid}"
+
+    # Fetch current review records for this business
+    spin = Spinner(f"Mengambil data ulasan untuk '{biz_name}'...")
+    spin.start()
+    try:
+        biz_detail = client.get_business_detail(bid)
+        spin.stop()
+    except Exception as exc:
+        spin.stop()
+        print(f" {C_RED}✖ Gagal memuat data ulasan: {exc}{C_RESET}")
+        input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+        return
+
+    reviews = biz_detail.get("reviews", [])
+    reviewed_count = sum(1 for r in reviews if r.get("status") in ("reviewed", "posted"))
+    pending_count = sum(1 for r in reviews if r.get("status") == "pending")
+
+    os.system("cls" if os.name == "nt" else "clear")
+    print_banner(client, status_info)
+
+    sub_lines = [
+        f" Target : {C_BOLD}{biz_name}{C_RESET} (ID: {bid})",
+        f" Ulasan : {C_GREEN}{reviewed_count} Sukses Terbit{C_RESET} │ {C_YELLOW}{pending_count} Antrean Pending{C_RESET} │ {C_WHITE}{len(reviews)} Total Record{C_RESET}",
+        "─" * 64,
+        f" {C_YELLOW}[1]{C_RESET} {C_WHITE}🗑️  HAPUS SEMUA ULASAN DI DATABASE{C_RESET}     {C_DIM}Bersihkan seluruh record ulasan target ini{C_RESET}",
+        f" {C_YELLOW}[2]{C_RESET} {C_WHITE}🔍  HAPUS ULASAN TERTENTU (PER ID){C_RESET}      {C_DIM}Pilih ID review tertentu yang ingin dihapus{C_RESET}",
+        f" {C_YELLOW}[3]{C_RESET} {C_RED}🛑  HAPUS ULASAN LANGSUNG DI GOOGLE MAPS{C_RESET} {C_DIM}Buka Chromium CDP hapus ulasan terbit{C_RESET}",
+        f" {C_YELLOW}[0]{C_RESET} {C_DIM}↩   BATAL & KEMBALI KE MENU UTAMA{C_RESET}",
+    ]
+    print_box(sub_lines, width=68, title=f"{C_BOLD}{C_CYAN}PILIH METODE REMOVE ULASAN{C_RESET}")
+
+    try:
+        sub_choice = input(f"\n {C_GREEN}Pilih opsi [0-3]: {C_RESET}").strip()
+    except (KeyboardInterrupt, EOFError):
+        return
+
+    if sub_choice == "1":
+        # Hapus semua ulasan di database
+        if len(reviews) == 0:
+            print(f"\n {C_YELLOW}Tidak ada record ulasan tersimpan untuk target ini.{C_RESET}")
+            input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+            return
+
+        confirm = input(f"\n {C_BOLD}{C_RED}Yakin ingin menghapus SEMUA ({len(reviews)}) ulasan untuk '{biz_name}' dari database? [y/N]: {C_RESET}").strip().lower()
+        if confirm in ("y", "yes"):
+            spin = Spinner(f"Menghapus seluruh ulasan target ID {bid}...")
+            spin.start()
+            try:
+                res = client.delete_all_reviews(bid)
+                spin.stop(f"\n {C_GREEN}✓ {res.get('message', 'Semua ulasan di database berhasil dihapus.')}{C_RESET}")
+            except Exception as exc:
+                spin.stop()
+                print(f"\n {C_RED}✖ Gagal menghapus ulasan: {exc}{C_RESET}")
+        else:
+            print(f" {C_DIM}Dibatalkan.{C_RESET}")
+        input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+
+    elif sub_choice == "2":
+        # Hapus ulasan per ID
+        if len(reviews) == 0:
+            print(f"\n {C_YELLOW}Tidak ada record ulasan untuk target ini.{C_RESET}")
+            input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+            return
+
+        print(f"\n {C_BOLD}{C_CYAN}DAFTAR RECORD ULASAN UNTUK '{biz_name}':{C_RESET}")
+        print(f" {'ID':<6} {'STATUS':<12} {'RATING':<8} {'AKUN EMAIL':<26} {'CUPLIKAN TEKS'}")
+        print(" " + "─" * 68)
+        for r in reviews[:25]:
+            rid = r.get("id")
+            st = (r.get("status") or "pending").upper()
+            stars = f"{r.get('star_rating') or 5} ★"
+            email = (r.get("email") or "-")[:25]
+            text = (r.get("review_text") or "-").replace("\n", " ")[:20]
+            st_color = C_GREEN if st in ("REVIEWED", "POSTED") else C_YELLOW if st == "PENDING" else C_RED
+            print(f" {C_BOLD}#{rid:<5}{C_RESET} {st_color}{st:<12}{C_RESET} {C_YELLOW}{stars:<8}{C_RESET} {C_CYAN}{email:<26}{C_RESET} {C_DIM}{text}...{C_RESET}")
+
+        if len(reviews) > 25:
+            print(f" {C_DIM}... dan {len(reviews) - 25} record ulasan lainnya.{C_RESET}")
+
+        try:
+            del_rid_in = input(f"\n {C_GREEN}Masukkan ID Review yang ingin dihapus (0 untuk batal): {C_RESET}").strip()
+            if del_rid_in and del_rid_in.isdigit() and del_rid_in != "0":
+                del_rid = int(del_rid_in)
+                spin = Spinner(f"Menghapus review #{del_rid}...")
+                spin.start()
+                try:
+                    res = client.delete_single_review(bid, del_rid)
+                    spin.stop(f"\n {C_GREEN}✓ Review #{del_rid} berhasil dihapus dari database.{C_RESET}")
+                except Exception as exc:
+                    spin.stop()
+                    print(f"\n {C_RED}✖ Gagal menghapus review #{del_rid}: {exc}{C_RESET}")
+        except (KeyboardInterrupt, EOFError):
+            pass
+        input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+
+    elif sub_choice == "3":
+        # Hapus ulasan langsung di Google Maps via Live Chromium CDP
+        if reviewed_count == 0:
+            print(f"\n {C_YELLOW}Tidak terdeteksi ulasan terbit (status 'reviewed') dari akun sendiri untuk target ini.{C_RESET}")
+            input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+            return
+
+        print(f"\n {C_BOLD}{C_YELLOW}⚠️  PERHATIAN: PROSES PENGHAPUSAN LANGSUNG DI GOOGLE MAPS PUBLIK{C_RESET}")
+        print(f" {C_DIM}Chromium akan login menggunakan cookie akun bot yang pernah mengulas target ini,{C_RESET}")
+        print(f" {C_DIM}membuka profil Maps tempat, mencari ulasan sendiri, dan menekan tombol 'Delete Review'.{C_RESET}")
+        confirm = input(f"\n {C_BOLD}{C_RED}Luncurkan bot Chromium untuk MENGHAPUS {reviewed_count} ulasan di Google Maps? [y/N]: {C_RESET}").strip().lower()
+        if confirm in ("y", "yes"):
+            spin = Spinner("Meluncurkan worker Chromium untuk hapus ulasan di Google Maps...")
+            spin.start()
+            try:
+                res = client.delete_maps_reviews_live(bid)
+                spin.stop(f"\n {C_GREEN}✓ {res.get('message', 'Worker Chromium diluncurkan untuk menghapus ulasan di Google Maps.')}{C_RESET}")
+            except Exception as exc:
+                spin.stop()
+                print(f"\n {C_RED}✖ Gagal meluncurkan: {exc}{C_RESET}")
+        else:
+            print(f" {C_DIM}Dibatalkan.{C_RESET}")
+        input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+
+
 # ── Task Execution & Live Log Monitor ─────────────────────────────────────────
 
 def format_task_log_line(ts: str, lvl: str, msg: str, email: str = "", account_name: str = "") -> str:
@@ -1008,12 +1182,13 @@ def interactive_menu(client: ServerClient):
             f" {C_YELLOW}[5]{C_RESET} {C_WHITE}📊  PANTAU LIVE LOGS{C_RESET}     {C_DIM}Lihat log proses aktivitas server{C_RESET}",
             f" {C_YELLOW}[6]{C_RESET} {C_WHITE}🛑  EMERGENCY STOP{C_RESET}       {C_DIM}Hentikan semua worker & browser{C_RESET}",
             f" {C_YELLOW}[7]{C_RESET} {C_WHITE}🔄  RESET ANTREAN{C_RESET}        {C_DIM}Bersihkan antrean ulasan & log bisnis{C_RESET}",
+            f" {C_YELLOW}[8]{C_RESET} {C_WHITE}🗑️   REMOVE ULASAN{C_RESET}        {C_DIM}Hapus ulasan database atau Google Maps{C_RESET}",
             f" {C_YELLOW}[0]{C_RESET} {C_RED}🚪  LOGOUT & KELUAR{C_RESET}      {C_DIM}Keluar dari sesi terminal{C_RESET}",
         ]
         print_box(menu_lines, width=68, title=f"{C_BOLD}{C_CYAN}DAFTAR MENU UTAMA{C_RESET}")
 
         try:
-            choice = input(f" {C_GREEN}Pilih menu [0-7] (default 1): {C_RESET}").strip() or "1"
+            choice = input(f" {C_GREEN}Pilih menu [0-8] (default 1): {C_RESET}").strip() or "1"
         except (KeyboardInterrupt, EOFError):
             print("\n Keluar.")
             break
@@ -1191,6 +1366,9 @@ def interactive_menu(client: ServerClient):
                     print(f" {C_RED}Gagal membersihkan log: {e}{C_RESET}")
             input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
 
+        elif choice == "8":
+            handle_remove_review_menu(client, status_info)
+
 
 # ── CLI Arguments Entrypoint ──────────────────────────────────────────────────
 
@@ -1231,6 +1409,12 @@ def main():
     p_cdel = subparsers.add_parser("cookie-del", help="Hapus cookie sesi Google (Admin)")
     p_cdel.add_argument("--id", type=int, help="ID Cookie yang ingin dihapus")
     p_cdel.add_argument("--email", default="", help="Email akun Google yang ingin dihapus")
+
+    # Command: review-del
+    p_rdel = subparsers.add_parser("review-del", help="Hapus ulasan target bisnis")
+    p_rdel.add_argument("--business", "-b", type=int, required=True, help="ID Bisnis target")
+    p_rdel.add_argument("--review-id", "-r", type=int, default=None, help="ID Review tertentu (opsional)")
+    p_rdel.add_argument("--maps", action="store_true", help="Hapus langsung di Google Maps via Chromium")
 
     args = parser.parse_args()
     client = ServerClient(base_url=args.server, api_key=args.key or "")
@@ -1285,6 +1469,16 @@ def main():
             print(f"{C_GREEN}✓ {res.get('message', 'Cookie berhasil dihapus.')}{C_RESET}")
         elif args.command == "run":
             run_task_stream(client, args.business, count=args.slots, star_rating=args.stars)
+        elif args.command == "review-del":
+            if args.maps:
+                res = client.delete_maps_reviews_live(args.business)
+                print(f"{C_GREEN}✓ {res.get('message', 'Worker Chromium diluncurkan untuk menghapus ulasan di Google Maps.')}{C_RESET}")
+            elif args.review_id:
+                res = client.delete_single_review(args.business, args.review_id)
+                print(f"{C_GREEN}✓ Review #{args.review_id} berhasil dihapus dari database.{C_RESET}")
+            else:
+                res = client.delete_all_reviews(args.business)
+                print(f"{C_GREEN}✓ {res.get('message', 'Semua ulasan di database berhasil dihapus.')}{C_RESET}")
 
 
 if __name__ == "__main__":

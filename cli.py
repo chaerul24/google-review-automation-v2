@@ -492,10 +492,11 @@ def interactive_loop():
         console.print("  [bold yellow][6][/bold yellow] 📊 [bold white]Pantau Live Process Logs[/bold white]")
         console.print("  [bold yellow][7][/bold yellow] 🖥️  [bold white]Uji Browser Chromium (Diagnostik)[/bold white]")
         console.print("  [bold yellow][8][/bold yellow] 🔄 [bold white]Reset Antrean Ulasan Bisnis[/bold white]")
+        console.print("  [bold yellow][9][/bold yellow] 🗑️  [bold white]Remove Ulasan (Hapus Review DB / Google Maps)[/bold white]")
         console.print("  [bold yellow][0][/bold yellow] 🚪 [bold red]Keluar[/bold red]")
         console.print("[bold cyan]───────────────────────────────────────────────────────────────────────[/bold cyan]")
 
-        choice = Prompt.ask("\n[bold green]Pilih menu[/bold green]", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8"], default="1")
+        choice = Prompt.ask("\n[bold green]Pilih menu[/bold green]", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], default="1")
 
         if choice == "0":
             console.print("\n[dim]Sampai jumpa![/dim]")
@@ -603,6 +604,67 @@ def interactive_loop():
                 db.delete_business_queue(b_id)
                 db.clear_process_logs(b_id)
                 console.print(f"[bold green]✓ Antrean ulasan dan log untuk Bisnis ID {b_id} telah dibersihkan.[/bold green]")
+            Prompt.ask("\n[dim]Tekan Enter untuk kembali...[/dim]")
+
+        elif choice == "9":
+            console.clear()
+            console.print(render_banner())
+            print_businesses_table()
+            b_id_str = Prompt.ask("\n[bold green]Masukkan ID Bisnis target yang ingin dihapus ulasannya[/bold green]")
+            if b_id_str.isdigit():
+                b_id = int(b_id_str)
+                biz = db.get_business(b_id)
+                if not biz:
+                    console.print(f"[red]Bisnis ID {b_id} tidak ditemukan.[/red]")
+                else:
+                    reviews = db.get_reviews_for_business(b_id)
+                    console.print(f"\n[bold cyan]Target: {biz['name']} (ID {b_id})[/bold cyan] — Total {len(reviews)} ulasan tercatat.")
+                    console.print("  [bold yellow][1][/bold yellow] 🗑️  Hapus SEMUA ulasan di database target ini")
+                    console.print("  [bold yellow][2][/bold yellow] 🔍  Hapus ulasan tertentu berdasarkan ID Review")
+                    console.print("  [bold yellow][3][/bold yellow] 🛑  Hapus ulasan akun bot langsung di Google Maps (Chromium Live)")
+                    console.print("  [bold yellow][0][/bold yellow] ↩️  Batal")
+
+                    sub_c = Prompt.ask("[bold green]Pilih opsi[/bold green]", choices=["0", "1", "2", "3"], default="0")
+                    if sub_c == "1":
+                        if Confirm.ask(f"[bold red]Yakin hapus SEMUA ({len(reviews)}) ulasan untuk '{biz['name']}' dari database?[/bold red]"):
+                            count = db.delete_all_reviews_for_business(b_id)
+                            console.print(f"[bold green]✓ {count} ulasan berhasil dihapus dari database target {biz['name']}.[/bold green]")
+                    elif sub_c == "2":
+                        if not reviews:
+                            console.print("[yellow]Tidak ada record ulasan untuk bisnis ini.[/yellow]")
+                        else:
+                            t = Table(box=box.SIMPLE_HEAVY)
+                            t.add_column("ID", style="bold")
+                            t.add_column("Status")
+                            t.add_column("Rating")
+                            t.add_column("Akun Email")
+                            t.add_column("Cuplikan Ulasan")
+                            for r in reviews[:20]:
+                                st = str(r.get("status", "pending")).upper()
+                                t.add_row(str(r["id"]), st, f"{r.get('star_rating', 5)} ★", str(r.get("email", "-")), (r.get("review_text") or "-")[:25])
+                            console.print(t)
+                            rid_in = Prompt.ask("[bold green]Masukkan ID Review yang ingin dihapus[/bold green]")
+                            if rid_in.isdigit():
+                                db.delete_review(int(rid_in))
+                                console.print(f"[bold green]✓ Review #{rid_in} berhasil dihapus dari database.[/bold green]")
+                    elif sub_c == "3":
+                        posted = [r for r in reviews if r.get("status") in ("reviewed", "posted")]
+                        if not posted:
+                            console.print("[yellow]Tidak ada ulasan terbit dari bot untuk bisnis ini.[/yellow]")
+                        elif Confirm.ask(f"[bold red]Luncurkan bot Chromium untuk MENGHAPUS {len(posted)} ulasan langsung di Google Maps?[/bold red]"):
+                            def run_del_bg():
+                                for idx, row in enumerate(posted):
+                                    bot.delete_own_review_on_maps(
+                                        email=row.get("email"),
+                                        maps_url=biz["url"],
+                                        business_name=biz["name"],
+                                        email_id=row.get("email_id"),
+                                        business_id=b_id,
+                                        slot_index=idx % 6,
+                                    )
+                                    time.sleep(2)
+                            threading.Thread(target=run_del_bg, daemon=True).start()
+                            console.print(f"[bold green]✓ Worker Chromium diluncurkan di background untuk menghapus {len(posted)} ulasan di Google Maps.[/bold green]")
             Prompt.ask("\n[dim]Tekan Enter untuk kembali...[/dim]")
 
 
