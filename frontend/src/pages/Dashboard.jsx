@@ -477,13 +477,16 @@ export default function Dashboard({ onLogout }) {
   const chartPoints = useMemo(() => {
     return chartData.map((d, i) => {
       const x = paddingLeft + (chartData.length > 1 ? (i / (chartData.length - 1)) * effectiveW : effectiveW / 2);
-      const reviewedY = baselineY - (d.count / chartMaxY) * effectiveH;
-      const pendingY = baselineY - (d.pending / chartMaxY) * effectiveH;
+      const graphBaselineY = baselineY - 4;
+      const effectiveGraphH = effectiveH - 8;
+
+      const reviewedY = d.count > 0 ? graphBaselineY - (d.count / chartMaxY) * effectiveGraphH : graphBaselineY;
+      const pendingY = d.pending > 0 ? graphBaselineY - (d.pending / chartMaxY) * effectiveGraphH : graphBaselineY;
       return {
         ...d,
         x,
-        reviewedY: Math.min(Math.max(reviewedY, paddingTop), baselineY),
-        pendingY: Math.min(Math.max(pendingY, paddingTop), baselineY),
+        reviewedY: Math.min(Math.max(reviewedY, paddingTop), graphBaselineY),
+        pendingY: Math.min(Math.max(pendingY, paddingTop), graphBaselineY),
       };
     });
   }, [chartData, chartMaxY, effectiveW, effectiveH, baselineY, paddingLeft, paddingTop]);
@@ -522,6 +525,14 @@ export default function Dashboard({ onLogout }) {
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-[#0F172A] flex font-['Plus_Jakarta_Sans',sans-serif]">
+      {/* Mobile Drawer Backdrop */}
+      {mobileMenuOpen && (
+        <div
+          onClick={() => setMobileMenuOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-xs lg:hidden transition-opacity"
+        />
+      )}
+
       {/* ========================================================================= */}
       {/* SIDEBAR: "hitam tapi bukan kaya hitam" -> Slate-900 (#0F172A) Sharp Flat */}
       {/* ========================================================================= */}
@@ -678,56 +689,59 @@ export default function Dashboard({ onLogout }) {
       {/* ========================================================================= */}
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         {/* Top Header Bar */}
-        <header className="h-16 bg-white border-b border-slate-200/90 px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30 shadow-xs">
-          <div className="flex items-center gap-3">
+        <header className="h-16 bg-white border-b border-slate-200/90 px-3 sm:px-6 flex items-center justify-between sticky top-0 z-30 shadow-xs">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
               onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden p-2 text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+              className="lg:hidden p-2 text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer shrink-0"
+              aria-label="Buka Menu"
             >
               <Layers className="w-5 h-5" />
             </button>
-            <div>
-              <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
-                {activeTab === 'overview' && 'Executive Dashboard & Ringkasan'}
+            <div className="min-w-0">
+              <h1 className="text-sm sm:text-base lg:text-lg font-bold text-slate-900 tracking-tight truncate">
+                {activeTab === 'overview' && 'Executive Dashboard'}
                 {activeTab === 'accounts' && 'Master Akun Google'}
-                {activeTab === 'cookies' && 'Manajemen Cookie Sesi Browser'}
-                {activeTab === 'server' && 'Manajemen Server & Worker Chromium'}
-                {activeTab === 'businesses' && 'Target Bisnis Google Maps'}
+                {activeTab === 'cookies' && 'Manajemen Cookie Sesi'}
+                {activeTab === 'server' && 'Manajemen Server'}
+                {activeTab === 'businesses' && 'Target Bisnis Maps'}
               </h1>
-              <p className="text-xs text-slate-500 hidden sm:block">
+              <p className="text-xs text-slate-500 hidden sm:block truncate">
                 AutoBotix Cloud Review SaaS • Native Linux Headless Engine
               </p>
             </div>
           </div>
 
           {/* Quick Header Actions */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {/* Live Check Google MyAccount Button */}
             <button
               onClick={handleCheckAccountNames}
               disabled={isCheckingNames}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors cursor-pointer disabled:opacity-50"
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors cursor-pointer disabled:opacity-50"
               title="Periksa nama profil akun & status sesi ke Google MyAccount"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isCheckingNames ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">
+              <span className="hidden md:inline">
                 {isCheckingNames ? 'Memindai Google...' : 'Cek Nama Akun Live'}
               </span>
+              <span className="md:hidden">Cek</span>
             </button>
 
             {/* Fast Run Review Bot Modal trigger */}
             <button
               onClick={() => setShowFastRunModal(true)}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors cursor-pointer"
             >
               <Play className="w-3.5 h-3.5 fill-current" />
-              <span>Jalankan Task</span>
+              <span className="hidden sm:inline">Jalankan Task</span>
+              <span className="sm:hidden">Run</span>
             </button>
 
             {/* Emergency Stop */}
             <button
               onClick={handleEmergencyStop}
-              className="p-2 rounded-xl text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+              className="p-1.5 sm:p-2 rounded-xl text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
               title="Emergency Stop (Hentikan semua worker & browser)"
             >
               <Square className="w-4 h-4" />
@@ -876,9 +890,9 @@ export default function Dashboard({ onLogout }) {
             </div>
 
             {/* Middle Section: SaaS Charts */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
               {/* Chart 1: Review Velocity & Growth Chart (SVG Spline Line Chart) */}
-              <div className="lg:col-span-2 bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
+              <div className="xl:col-span-2 bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col justify-between">
                 <div>
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
                     <div>
@@ -934,8 +948,37 @@ export default function Dashboard({ onLogout }) {
                     </div>
                   </div>
 
+                  {/* Operational KPI Strip inside Chart */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4 p-2.5 bg-slate-50/80 rounded-xl border border-slate-100 text-xs">
+                    <div className="px-2">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block tracking-wider">Total 7 Hari</span>
+                      <span className="text-base font-extrabold text-slate-900 font-mono">
+                        {total7DaysReviewed} <span className="text-[11px] font-normal text-slate-500 font-sans">sukses</span>
+                      </span>
+                    </div>
+                    <div className="px-2 border-l border-slate-200/60">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block tracking-wider">Antrean</span>
+                      <span className="text-base font-extrabold text-amber-600 font-mono">
+                        {total7DaysPending} <span className="text-[11px] font-normal text-slate-500 font-sans">antrean</span>
+                      </span>
+                    </div>
+                    <div className="px-2 border-l border-slate-200/60">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block tracking-wider">Puncak Harian</span>
+                      <span className="text-base font-extrabold text-blue-600 font-mono">
+                        {Math.max(...chartData.map((d) => d.count), 0)}{' '}
+                        <span className="text-[11px] font-normal text-slate-500 font-sans">/hari</span>
+                      </span>
+                    </div>
+                    <div className="px-2 border-l border-slate-200/60">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block tracking-wider">Efisiensi Bot</span>
+                      <span className="text-base font-extrabold text-emerald-600 font-mono">
+                        {data?.analytics?.success_rate != null ? `${data.analytics.success_rate}%` : '100%'}
+                      </span>
+                    </div>
+                  </div>
+
                   {/* SVG Spline Graphic Container */}
-                  <div className="h-60 w-full relative select-none">
+                  <div className="h-52 sm:h-60 w-full relative select-none">
                     <svg className="w-full h-full overflow-visible" viewBox={`0 0 ${chartW} ${chartH}`} preserveAspectRatio="none">
                       <defs>
                         <linearGradient id="reviewedGrad" x1="0" y1="0" x2="0" y2="1">
@@ -977,6 +1020,34 @@ export default function Dashboard({ onLogout }) {
                         );
                       })}
 
+                      {/* Subtle Volume Pillar Silhouettes behind Spline */}
+                      {chartPoints.map((p, idx) => {
+                        const colW = 18;
+                        const isHovered = chartHoverIdx === idx;
+                        const activeCount = p.count + p.pending;
+                        const barH = activeCount > 0 ? Math.max(8, ((activeCount / chartMaxY) * (effectiveH - 8))) : 4;
+                        const barY = baselineY - barH;
+
+                        return (
+                          <rect
+                            key={`vol-bar-${idx}`}
+                            x={p.x - colW / 2}
+                            y={barY}
+                            width={colW}
+                            height={barH}
+                            rx={4}
+                            fill={
+                              isHovered
+                                ? 'rgba(37, 99, 235, 0.18)'
+                                : p.count > 0
+                                ? 'rgba(37, 99, 235, 0.08)'
+                                : 'rgba(241, 245, 249, 0.8)'
+                            }
+                            className="transition-colors duration-200"
+                          />
+                        );
+                      })}
+
                       {/* Series 1: Reviewed Area & Spline Line */}
                       {(chartMetricView === 'both' || chartMetricView === 'reviewed') && (
                         <>
@@ -998,7 +1069,7 @@ export default function Dashboard({ onLogout }) {
                       )}
 
                       {/* Series 2: Pending Area & Spline Line */}
-                      {(chartMetricView === 'both' || chartMetricView === 'pending') && (
+                      {(chartMetricView === 'both' || chartMetricView === 'pending') && (total7DaysPending > 0 || chartMetricView === 'pending') && (
                         <>
                           <path
                             d={pendingSpline.areaPath}
@@ -1114,6 +1185,7 @@ export default function Dashboard({ onLogout }) {
                             className="cursor-pointer"
                             onMouseEnter={() => setChartHoverIdx(idx)}
                             onMouseLeave={() => setChartHoverIdx(null)}
+                            onTouchStart={() => setChartHoverIdx(idx)}
                           />
                         );
                       })}
@@ -1168,8 +1240,8 @@ export default function Dashboard({ onLogout }) {
                   </div>
                 </div>
 
-                {/* X-Axis Labels */}
-                <div className="flex justify-between items-center text-[11px] font-mono text-slate-500 pt-3 border-t border-slate-100 mt-2">
+                {/* X-Axis Labels (Responsive) */}
+                <div className="flex justify-between items-center text-[10px] sm:text-[11px] font-mono text-slate-500 pt-3 border-t border-slate-100 mt-2">
                   {chartPoints.map((p, idx) => (
                     <div
                       key={idx}
@@ -1182,10 +1254,14 @@ export default function Dashboard({ onLogout }) {
                       }`}
                       onMouseEnter={() => setChartHoverIdx(idx)}
                       onMouseLeave={() => setChartHoverIdx(null)}
+                      onClick={() => setChartHoverIdx(chartHoverIdx === idx ? null : idx)}
                     >
-                      <div>{p.label}</div>
+                      <div>
+                        <span className="hidden sm:inline">{p.label}</span>
+                        <span className="sm:hidden">{p.isToday ? 'Hari Ini' : p.label.split(' ')[0]}</span>
+                      </div>
                       {p.isToday && (
-                        <span className="inline-block mt-0.5 text-[9px] font-sans px-1.5 py-0.2 rounded-full bg-blue-50 text-blue-600 border border-blue-200/60 font-semibold">
+                        <span className="hidden sm:inline-block mt-0.5 text-[9px] font-sans px-1.5 py-0.2 rounded-full bg-blue-50 text-blue-600 border border-blue-200/60 font-semibold">
                           Hari Ini
                         </span>
                       )}
