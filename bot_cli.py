@@ -13,9 +13,11 @@ and runs review tasks using native Linux Chromium on the server (zero VM).
 import argparse
 import json
 import os
+import re
 import sys
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -266,6 +268,73 @@ def print_google_maps_logo(padding: str = "                  "):
     print(brand_title)
 
 
+ANSI_REGEX = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+
+
+def strip_ansi(s: str) -> str:
+    """Strip ANSI escape sequences for accurate character width calculation."""
+    return ANSI_REGEX.sub('', s)
+
+
+def str_display_width(s: str) -> int:
+    """Calculate terminal column width of string, accounting for wide emojis and ignoring ANSI codes."""
+    clean = strip_ansi(s)
+    width = 0
+    for ch in clean:
+        if unicodedata.east_asian_width(ch) in ('W', 'F'):
+            width += 2
+        else:
+            width += 1
+    return width
+
+
+def pad_to_display_width(text: str, width: int) -> str:
+    """Pad string with spaces on right to reach exact target visible column width."""
+    current_w = str_display_width(text)
+    pad = max(0, width - current_w)
+    return text + (' ' * pad)
+
+
+def print_box(lines: List[str], width: int = 68, title: Optional[str] = None):
+    """Print an automatically sized and aligned unicode box.
+    Guarantees that every row's right border ║ aligns with the box corners.
+    """
+    content_widths = [str_display_width(l) for l in lines]
+    if title:
+        content_widths.append(str_display_width(title))
+    inner_width = max(width, max(content_widths) if content_widths else width)
+
+    top = f" ╔{'═' * (inner_width + 2)}╗"
+    sep = f" ╠{'═' * (inner_width + 2)}╣"
+    bot = f" ╚{'═' * (inner_width + 2)}╝"
+
+    print(top)
+    if title:
+        t_w = str_display_width(title)
+        t_pad_left = (inner_width - t_w) // 2
+        t_pad_right = inner_width - t_w - t_pad_left
+        print(f" ║ {' ' * t_pad_left}{title}{' ' * t_pad_right} ║")
+        print(sep)
+
+    for line in lines:
+        cur_w = str_display_width(line)
+        pad = max(0, inner_width - cur_w)
+        print(f" ║ {line}{' ' * pad} ║")
+
+    print(bot)
+
+
+def box_header(title: str, width: int = 68):
+    """Print a single-row boxed banner header with perfect alignment."""
+    t_w = str_display_width(title)
+    inner_width = max(width, t_w)
+    t_pad_left = (inner_width - t_w) // 2
+    t_pad_right = inner_width - t_w - t_pad_left
+    print(f" ╔{'═' * (inner_width + 2)}╗")
+    print(f" ║ {' ' * t_pad_left}{title}{' ' * t_pad_right} ║")
+    print(f" ╚{'═' * (inner_width + 2)}╝")
+
+
 def print_banner(client: ServerClient, status_info: Optional[Dict[str, Any]] = None):
     print()
     print_google_maps_logo("                  ")
@@ -273,8 +342,9 @@ def print_banner(client: ServerClient, status_info: Optional[Dict[str, Any]] = N
     print()
 
     user_label = client.username or "admin"
-    print(f" ╔══════════════════════════════════════════════════════════════════════╗")
-    print(f" ║ {C_DIM}Host Server:{C_RESET} {C_GREEN}{client.base_url:<35}{C_RESET} {C_DIM}User:{C_RESET} {C_CYAN}{user_label:<14}{C_RESET} ║")
+    lines = [
+        f"{C_DIM}Host Server:{C_RESET} {C_GREEN}{client.base_url}{C_RESET}   {C_DIM}User:{C_RESET} {C_CYAN}{user_label}{C_RESET}"
+    ]
     if status_info:
         b_cnt = status_info.get("businesses_count", 0)
         a_cnt = status_info.get("accounts_count", 0)
@@ -282,10 +352,10 @@ def print_banner(client: ServerClient, status_info: Optional[Dict[str, Any]] = N
         r_cnt = status_info.get("reviewed_count", 0)
         p_cnt = status_info.get("pending_count", 0)
         disps = " ".join(status_info.get("displays", []))
-        line2 = f"Target: {b_cnt} │ Akun: {a_cnt} │ Cookie: {c_cnt} │ Ulasan: {r_cnt} │ Antrean: {p_cnt}"
-        print(f" ║ {C_WHITE}{line2:<68}{C_RESET} ║")
-        print(f" ║ {C_DIM}Display Virtual Xvfb: {C_CYAN}{disps:<46}{C_RESET} ║")
-    print(f" ╚══════════════════════════════════════════════════════════════════════╝")
+        lines.append(f"Target: {C_WHITE}{b_cnt}{C_RESET} │ Akun: {C_WHITE}{a_cnt}{C_RESET} │ Cookie: {C_WHITE}{c_cnt}{C_RESET} │ Ulasan: {C_WHITE}{r_cnt}{C_RESET} │ Antrean: {C_WHITE}{p_cnt}{C_RESET}")
+        lines.append(f"{C_DIM}Display Virtual Xvfb:{C_RESET} {C_CYAN}{disps}{C_RESET}")
+
+    print_box(lines, width=68)
 
 
 def _do_login(client: ServerClient, default_user: str = "admin") -> bool:
@@ -456,9 +526,8 @@ prompt_login = prompt_auth
 
 
 def print_businesses(businesses: List[Dict[str, Any]]):
-    print(f"\n {C_BOLD}{C_CYAN}╔══════════════════════════════════════════════════════════════════════╗{C_RESET}")
-    print(f" {C_BOLD}{C_CYAN}║                  DAFTAR TARGET GOOGLE MAPS AKTIF                     ║{C_RESET}")
-    print(f" {C_BOLD}{C_CYAN}╚══════════════════════════════════════════════════════════════════════╝{C_RESET}")
+    print()
+    box_header(f"{C_BOLD}{C_CYAN}DAFTAR TARGET GOOGLE MAPS AKTIF{C_RESET}")
     if not businesses:
         print(f"  {C_YELLOW}Belum ada target bisnis terdaftar.{C_RESET}")
         return
@@ -477,9 +546,8 @@ def print_businesses(businesses: List[Dict[str, Any]]):
 
 
 def print_accounts(accounts: List[Dict[str, Any]]):
-    print(f"\n {C_BOLD}{C_CYAN}╔══════════════════════════════════════════════════════════════════════╗{C_RESET}")
-    print(f" {C_BOLD}{C_CYAN}║                 STATUS AKUN & SESI COOKIE GOOGLE                     ║{C_RESET}")
-    print(f" {C_BOLD}{C_CYAN}╚══════════════════════════════════════════════════════════════════════╝{C_RESET}")
+    print()
+    box_header(f"{C_BOLD}{C_CYAN}STATUS AKUN & SESI COOKIE GOOGLE{C_RESET}")
     if not accounts:
         print(f"  {C_YELLOW}Belum ada akun Google terdaftar.{C_RESET}")
         return
@@ -502,16 +570,16 @@ def print_accounts(accounts: List[Dict[str, Any]]):
             st_color = f"{C_DIM}- TIDAK ADA -{C_RESET}"
 
         fl_color = f"{C_RED}{flag}{C_RESET}" if flag == "Flagged" else f"{C_GREEN}{flag}{C_RESET}"
-        print(f" {C_YELLOW}{aid:<6}{C_RESET} {C_WHITE}{email:<34}{C_RESET} {st_color:<29} {fl_color}")
+        st_pad = pad_to_display_width(st_color, 18)
+        print(f" {C_YELLOW}{aid:<6}{C_RESET} {C_WHITE}{email:<34}{C_RESET} {st_pad} {fl_color}")
     print()
 
 
 # ── Task Execution & Live Log Monitor ─────────────────────────────────────────
 
 def run_task_stream(client: ServerClient, business_id: int, count: int = 1, star_rating: int = 5):
-    print(f"\n {C_BOLD}{C_CYAN}╔══════════════════════════════════════════════════════════════════════╗{C_RESET}")
-    print(f" {C_BOLD}{C_CYAN}║                     MEMULAI TASK ULASAN BOT                          ║{C_RESET}")
-    print(f" {C_BOLD}{C_CYAN}╚══════════════════════════════════════════════════════════════════════╝{C_RESET}")
+    print()
+    box_header(f"{C_BOLD}{C_CYAN}MEMULAI TASK ULASAN BOT{C_RESET}")
 
     spin = Spinner("Mengirim instruksi task dan menginisialisasi browser di server...")
     spin.start()
@@ -523,9 +591,8 @@ def run_task_stream(client: ServerClient, business_id: int, count: int = 1, star
         print(f" {C_RED}✖ Gagal memulai task: {exc}{C_RESET}")
         return False
 
-    print(f"\n {C_BOLD}{C_CYAN}╔══════════════════════════════════════════════════════════════════════╗{C_RESET}")
-    print(f" {C_BOLD}{C_CYAN}║                LIVE PROCESS LOGS (SERVER CHROMIUM)                   ║{C_RESET}")
-    print(f" {C_BOLD}{C_CYAN}╚══════════════════════════════════════════════════════════════════════╝{C_RESET}")
+    print()
+    box_header(f"{C_BOLD}{C_CYAN}LIVE PROCESS LOGS (SERVER CHROMIUM){C_RESET}")
     print(f" {C_DIM}Memantau perkembangan ulasan secara live... (Tekan Ctrl+C untuk kembali){C_RESET}\n")
 
     seen_ids = set()
@@ -634,18 +701,17 @@ def interactive_menu(client: ServerClient):
         os.system("cls" if os.name == "nt" else "clear")
         print_banner(client, status_info)
 
-        print(f" ╔══════════════════════════════════════════════════════════════════════╗")
-        print(f" ║ {C_BOLD}{C_CYAN}                         DAFTAR MENU UTAMA                            {C_RESET}║")
-        print(f" ╠══════════════════════════════════════════════════════════════════════╣")
-        print(f" ║  {C_YELLOW}[1]{C_RESET} {C_WHITE}🚀  JALANKAN TASK        {C_DIM}Mulai ulasan multi-browser otomatis    {C_RESET}║")
-        print(f" ║  {C_YELLOW}[2]{C_RESET} {C_WHITE}🏢  TARGET GOOGLE MAPS   {C_DIM}Lihat daftar target & jumlah review    {C_RESET}║")
-        print(f" ║  {C_YELLOW}[3]{C_RESET} {C_WHITE}➕  TAMBAH BISNIS BARU   {C_DIM}Daftarkan URL Google Maps baru         {C_RESET}║")
-        print(f" ║  {C_YELLOW}[4]{C_RESET} {C_WHITE}🍪  STATUS COOKIE        {C_DIM}Cek validitas akun Google & sesi CDP   {C_RESET}║")
-        print(f" ║  {C_YELLOW}[5]{C_RESET} {C_WHITE}📊  PANTAU LIVE LOGS     {C_DIM}Lihat log proses aktivitas server      {C_RESET}║")
-        print(f" ║  {C_YELLOW}[6]{C_RESET} {C_WHITE}🛑  EMERGENCY STOP       {C_DIM}Hentikan semua worker & browser        {C_RESET}║")
-        print(f" ║  {C_YELLOW}[7]{C_RESET} {C_WHITE}🔄  RESET ANTREAN        {C_DIM}Bersihkan antrean ulasan & log bisnis  {C_RESET}║")
-        print(f" ║  {C_YELLOW}[0]{C_RESET} {C_RED}🚪  LOGOUT & KELUAR      {C_DIM}Keluar dari sesi terminal              {C_RESET}║")
-        print(f" ╚══════════════════════════════════════════════════════════════════════╝")
+        menu_lines = [
+            f" {C_YELLOW}[1]{C_RESET} {C_WHITE}🚀  JALANKAN TASK{C_RESET}        {C_DIM}Mulai ulasan multi-browser otomatis{C_RESET}",
+            f" {C_YELLOW}[2]{C_RESET} {C_WHITE}🏢  TARGET GOOGLE MAPS{C_RESET}   {C_DIM}Lihat daftar target & jumlah review{C_RESET}",
+            f" {C_YELLOW}[3]{C_RESET} {C_WHITE}➕  TAMBAH BISNIS BARU{C_RESET}   {C_DIM}Daftarkan URL Google Maps baru{C_RESET}",
+            f" {C_YELLOW}[4]{C_RESET} {C_WHITE}🍪  STATUS COOKIE{C_RESET}        {C_DIM}Cek validitas akun Google & sesi CDP{C_RESET}",
+            f" {C_YELLOW}[5]{C_RESET} {C_WHITE}📊  PANTAU LIVE LOGS{C_RESET}     {C_DIM}Lihat log proses aktivitas server{C_RESET}",
+            f" {C_YELLOW}[6]{C_RESET} {C_WHITE}🛑  EMERGENCY STOP{C_RESET}       {C_DIM}Hentikan semua worker & browser{C_RESET}",
+            f" {C_YELLOW}[7]{C_RESET} {C_WHITE}🔄  RESET ANTREAN{C_RESET}        {C_DIM}Bersihkan antrean ulasan & log bisnis{C_RESET}",
+            f" {C_YELLOW}[0]{C_RESET} {C_RED}🚪  LOGOUT & KELUAR{C_RESET}      {C_DIM}Keluar dari sesi terminal{C_RESET}",
+        ]
+        print_box(menu_lines, width=68, title=f"{C_BOLD}{C_CYAN}DAFTAR MENU UTAMA{C_RESET}")
 
         try:
             choice = input(f" {C_GREEN}Pilih menu [0-7] (default 1): {C_RESET}").strip() or "1"
