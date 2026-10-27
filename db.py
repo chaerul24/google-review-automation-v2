@@ -805,9 +805,16 @@ def clear_process_logs(business_id):
 def get_process_logs(business_id, limit=80):
     with get_db() as conn:
         rows = conn.execute(
-            """SELECT id, review_id, level, message, created_at
-               FROM process_logs WHERE business_id = ?
-               ORDER BY id DESC LIMIT ?""",
+            """SELECT pl.id, pl.review_id, pl.level, pl.message, pl.created_at,
+                      COALESCE(e.email, e2.email, '') AS email,
+                      COALESCE(e.account_name, e2.account_name, c.account_name, '') AS account_name
+               FROM process_logs pl
+               LEFT JOIN emails e ON pl.review_id = e.id
+               LEFT JOIN reviews r ON pl.review_id = r.id
+               LEFT JOIN emails e2 ON r.email_id = e2.id
+               LEFT JOIN cookies c ON COALESCE(e.email, e2.email) = c.email
+               WHERE pl.business_id = ?
+               ORDER BY pl.id DESC LIMIT ?""",
             (business_id, limit),
         ).fetchall()
         logs = []

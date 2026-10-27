@@ -805,23 +805,96 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
 
 # ── Task Execution & Live Log Monitor ─────────────────────────────────────────
 
-def run_task_stream(client: ServerClient, business_id: int, count: int = 1, star_rating: int = 5):
+def format_task_log_line(ts: str, lvl: str, msg: str, email: str = "", account_name: str = "") -> str:
+    """Format single log entry into a unified CLI tree branch with vertical trunk | and -> process indicator."""
+    m_bracket = re.match(r"^\[([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)\]\s*(.*)", msg)
+    if m_bracket:
+        detected_email = m_bracket.group(1)
+        clean_msg = m_bracket.group(2).strip()
+    else:
+        detected_email = email
+        clean_msg = msg.strip()
+
+    if detected_email:
+        acc_str = account_name.strip() if account_name else ""
+        if acc_str and acc_str.lower() != detected_email.lower():
+            label = f"{acc_str} • {detected_email.split('@')[0]}"
+        else:
+            label = detected_email
+        actor_badge = f"{C_BOLD}{C_CYAN}[{label[:26]}]{C_RESET}"
+    elif any(w in clean_msg.lower() for w in ("worker", "antrean", "tugas masuk", "jadwal", "delay", "slot")):
+        actor_badge = f"{C_YELLOW}[SISTEM WORKER]{C_RESET}"
+    else:
+        actor_badge = f"{C_BLUE}[SISTEM BROWSER]{C_RESET}"
+
+    if lvl == "success":
+        arrow = f"{C_GREEN}──>{C_RESET}"
+        msg_out = f"{C_BOLD}{C_GREEN}✓ {clean_msg}{C_RESET}"
+    elif lvl in ("error", "fatal"):
+        arrow = f"{C_RED}──>{C_RESET}"
+        msg_out = f"{C_BOLD}{C_RED}✖ {clean_msg}{C_RESET}"
+    elif lvl == "warning":
+        arrow = f"{C_YELLOW}──>{C_RESET}"
+        msg_out = f"{C_YELLOW}▲ {clean_msg}{C_RESET}"
+    else:
+        arrow = f"{C_CYAN}──>{C_RESET}"
+        msg_out = f"{C_WHITE}{clean_msg}{C_RESET}"
+
+    return f" {C_CYAN}│   ├──{C_RESET} {C_DIM}{ts}{C_RESET} {arrow} {actor_badge} {arrow} {msg_out}"
+
+
+def run_task_stream(
+    client: ServerClient,
+    business_id: int,
+    count: int = 1,
+    star_rating: int = 5,
+    business_name: str = "",
+    active_accounts: Optional[List[Dict[str, Any]]] = None,
+):
     print()
-    box_header(f"{C_BOLD}{C_CYAN}MEMULAI TASK ULASAN BOT{C_RESET}")
+    print(f" {C_CYAN}┌── [2/3] MEMPERSIAPKAN TUGAS ULASAN BOT{C_RESET}")
+    biz_label = business_name if business_name else f"Bisnis #{business_id}"
+    print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Target Bisnis{C_RESET}  ──────> {C_WHITE}{biz_label}{C_RESET}")
+    print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Jumlah Browser{C_RESET} ─────> {C_CYAN}{count} Layar Chromium Paralel{C_RESET}")
+    star_str = "⭐" * star_rating
+    print(f" {C_CYAN}│   └──{C_RESET} {C_DIM}Rating Target{C_RESET}  ─────> {C_YELLOW}{star_str}{C_RESET} {C_DIM}({star_rating} Bintang){C_RESET}")
+    print(f" {C_CYAN}│{C_RESET}")
+    print(f" {C_CYAN}├── [PENUGASAN SLOT BROWSER & DISPLAY]{C_RESET}")
+
+    assigned = (active_accounts or [])[:count]
+    for s_idx in range(count):
+        disp = f":{99 + s_idx}"
+        is_last = (s_idx == count - 1)
+        sub_branch = "└──" if is_last else "├──"
+        if s_idx < len(assigned):
+            acc = assigned[s_idx]
+            aname = (acc.get("account_name") or "").strip()
+            aemail = acc.get("email", "")
+            lbl = f"{aname} ({aemail})" if aname and aname != aemail else aemail
+        else:
+            lbl = f"Akun Aktif Slot #{s_idx + 1}"
+        print(f" {C_CYAN}│   {sub_branch}{C_RESET} [Slot {s_idx + 1}] Display {disp} ──> {C_WHITE}{lbl}{C_RESET} ──> {C_GREEN}[SIAP]{C_RESET}")
+        time.sleep(0.04)
+
+    print(f" {C_CYAN}│{C_RESET}")
+    print(f" {C_CYAN}├── [PENGIRIMAN INSTRUKSI KE SERVER]{C_RESET}")
 
     spin = Spinner("Mengirim instruksi task dan menginisialisasi browser di server...")
     spin.start()
     try:
         res = client.start_task(business_id, count=count, star_rating=star_rating)
-        spin.stop(f" {C_BOLD}{C_GREEN}✓ Task ulasan berhasil dijadwalkan di server!{C_RESET} (Jobs: {res.get('jobs_created', count)}, Antrean: {res.get('already_pending', 0)})")
+        spin.stop(f" {C_CYAN}│   └──{C_RESET} Dispatch API ───────> {C_BOLD}{C_GREEN}[BERHASIL DIJADWALKAN 🚀]{C_RESET} (Jobs: {res.get('jobs_created', count)}, Antrean: {res.get('already_pending', 0)})")
     except Exception as exc:
         spin.stop()
-        print(f" {C_RED}✖ Gagal memulai task: {exc}{C_RESET}")
+        print(f" {C_CYAN}│   └──{C_RESET} Dispatch API ───────> {C_BOLD}{C_RED}[GAGAL: {exc}]{C_RESET}")
+        print(f" {C_CYAN}│{C_RESET}")
+        print(f" {C_CYAN}└──{C_RESET} {C_RED}Task ulasan dibatalkan karena gagal menghubungi server.{C_RESET}")
         return False
 
-    print()
-    box_header(f"{C_BOLD}{C_CYAN}LIVE PROCESS LOGS (SERVER CHROMIUM){C_RESET}")
-    print(f" {C_DIM}Memantau perkembangan ulasan secara live... (Tekan Ctrl+C untuk kembali){C_RESET}\n")
+    print(f" {C_CYAN}│{C_RESET}")
+    print(f" {C_CYAN}├── [3/3] LIVE PROCESS LOGS (SERVER CHROMIUM){C_RESET}")
+    print(f" {C_CYAN}│   {C_DIM}Memantau alur ulasan browser per akun secara live... (Tekan Ctrl+C untuk kembali){C_RESET}")
+    print(f" {C_CYAN}│{C_RESET}")
 
     seen_ids = set()
     start_time = time.time()
@@ -852,23 +925,13 @@ def run_task_stream(client: ServerClient, business_id: int, count: int = 1, star
                         lvl = (l.get("level") or "info").lower()
                         ts = l.get("created_at", "").split()[-1]
                         msg = l.get("message", "")
+                        l_email = l.get("email", "")
+                        l_aname = l.get("account_name", "")
 
-                        if lvl == "success":
-                            tag = f"{C_GREEN}[SUCCESS]{C_RESET}"
-                            msg_color = f"{C_GREEN}{msg}{C_RESET}"
-                        elif lvl in ("error", "fatal"):
-                            tag = f"{C_RED}[ERROR]{C_RESET}"
-                            msg_color = f"{C_RED}{msg}{C_RESET}"
-                        elif lvl == "warning":
-                            tag = f"{C_YELLOW}[WARN]{C_RESET}"
-                            msg_color = f"{C_YELLOW}{msg}{C_RESET}"
-                        else:
-                            tag = f"{C_BLUE}[INFO]{C_RESET}"
-                            msg_color = f"{C_WHITE}{msg}{C_RESET}"
-
-                        # Clear spinner line and print log
+                        # Clear spinner line and print log branch
                         sys.stdout.write("\r\033[K")
-                        print(f" {C_DIM}{ts}{C_RESET} {tag} {msg_color}")
+                        line_out = format_task_log_line(ts, lvl, msg, email=l_email, account_name=l_aname)
+                        print(line_out)
 
                         if "Worker selesai memproses" in msg or "berhasil dikirim" in msg:
                             task_finished = True
@@ -878,22 +941,24 @@ def run_task_stream(client: ServerClient, business_id: int, count: int = 1, star
                 except Exception:
                     pass
 
-            # Animate spinner on current bottom line
+            # Animate spinner on current bottom line (connected to tree trunk)
             sp_idx += 1
             sp_char = SPINNER_FRAMES[sp_idx % len(SPINNER_FRAMES)]
-            st_badge = f"{C_GREEN}{status.upper()}{C_RESET}" if status == "running" else f"{C_YELLOW}{status.upper()}{C_RESET}"
-            sys.stdout.write(f"\r {C_CYAN}{sp_char}{C_RESET} {C_WHITE}Status: {st_badge} │ {C_DIM}Waktu:{C_RESET} {C_GREEN}{time_str}{C_RESET} │ {C_DIM}Tekan Ctrl+C untuk kembali{C_RESET}\033[K")
+            st_badge = f"{C_GREEN}{status.upper()}{C_RESET}" if status in ("running", "reviewing") else f"{C_YELLOW}{status.upper()}{C_RESET}"
+            sys.stdout.write(f"\r {C_CYAN}│   {sp_char}{C_RESET} {C_WHITE}Status: {st_badge} │ {C_DIM}Waktu:{C_RESET} {C_GREEN}{time_str}{C_RESET} │ {C_DIM}Tekan Ctrl+C untuk kembali{C_RESET}\033[K")
             sys.stdout.flush()
             time.sleep(0.09)
 
     except KeyboardInterrupt:
         sys.stdout.write("\r\033[K")
-        print(f"\n {C_YELLOW}! Pemantauan live dihentikan oleh user. Tugas tetap berjalan di server.{C_RESET}")
+        print(f" {C_CYAN}│{C_RESET}")
+        print(f" {C_CYAN}└──{C_RESET} {C_YELLOW}! Pemantauan live dihentikan oleh user. Tugas ulasan tetap berjalan di background server.{C_RESET}")
         return True
 
     sys.stdout.write("\r\033[K")
     elapsed = int(time.time() - start_time)
-    print(f"\n {C_BOLD}{C_GREEN}✓ Seluruh proses ulasan selesai dalam {elapsed} detik!{C_RESET}")
+    print(f" {C_CYAN}│{C_RESET}")
+    print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_GREEN}✓ Seluruh proses ulasan selesai dalam {elapsed} detik!{C_RESET}")
     return True
 
 
@@ -959,26 +1024,68 @@ def interactive_menu(client: ServerClient):
             break
 
         elif choice == "1":
-            spin = Spinner("Memeriksa ketersediaan akun Google aktif...")
+            print()
+            print(f" {C_CYAN}┌── [1/3] MEMERIKSA KESIAPAN AKUN GOOGLE{C_RESET}")
+            print(f" {C_CYAN}│{C_RESET}   {C_DIM}Memvalidasi status sesi & profil akun dari database server...{C_RESET}")
+            print(f" {C_CYAN}│{C_RESET}")
+
+            spin = Spinner("Memuat data akun dan status sesi Google...")
             spin.start()
             try:
                 cur_status = client.get_status()
-                active_cnt = cur_status.get("active_cookies", 0)
                 spin.stop()
-            except Exception:
+            except Exception as e:
                 spin.stop()
-                active_cnt = status_info.get("active_cookies", 0)
-
-            if active_cnt == 0:
-                print(f"\n {C_BOLD}{C_RED}✖ Tidak dapat menjalankan task: Tidak ada akun dengan status AKTIF.{C_RESET}")
-                print(f"   {C_YELLOW}Semua akun saat ini berstatus 'PERLU LOGIN' atau belum memiliki cookie valid.{C_RESET}")
-                print(f"   {C_DIM}Silakan periksa atau tambahkan cookie aktif terlebih dahulu di menu [4] Kelola Cookie.{C_RESET}")
+                print(f" {C_CYAN}│   └──{C_RESET} {C_RED}Gagal memuat status: {e}{C_RESET}")
+                print(f" {C_CYAN}│{C_RESET}")
+                print(f" {C_CYAN}└──{C_RESET} {C_RED}Task ulasan dibatalkan.{C_RESET}")
                 input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
                 continue
 
-            print(f" {C_BOLD}{C_GREEN}✓ Terdeteksi {active_cnt} akun dengan sesi AKTIF siap menjalankan ulasan.{C_RESET}")
+            accounts = cur_status.get("accounts", [])
+            active_accs = [a for a in accounts if a.get("cookie_status") == "active"]
 
-            businesses = status_info.get("businesses", [])
+            # Visualisasi tree per akun dengan status dan panah alur
+            limit_show = 12
+            to_show = accounts[:limit_show] if accounts else []
+            for idx, a in enumerate(to_show, 1):
+                is_last = (idx == len(to_show) and len(accounts) <= limit_show)
+                branch = "└──" if is_last else "├──"
+                c_st = a.get("cookie_status") or "no_cookie"
+                acc_name = (a.get("account_name") or "").strip()
+                email = a.get("email", "")
+                if acc_name:
+                    lbl = f"{C_BOLD}{acc_name}{C_RESET} {C_DIM}({email}){C_RESET}"
+                else:
+                    lbl = f"{C_CYAN}{email}{C_RESET}"
+
+                if c_st == "active":
+                    badge = f"{C_GREEN}● AKTIF{C_RESET} {C_DIM}[Siap Digunakan]{C_RESET}"
+                elif c_st == "needs_login":
+                    badge = f"{C_YELLOW}▲ PERLU LOGIN{C_RESET} {C_DIM}[Dilewati]{C_RESET}"
+                elif c_st == "expired":
+                    badge = f"{C_RED}✖ KEDALUWARSA{C_RESET} {C_DIM}[Dilewati]{C_RESET}"
+                else:
+                    badge = f"{C_DIM}- TIDAK ADA COOKIE - [Dilewati]{C_RESET}"
+
+                print(f" {C_CYAN}│   {branch}{C_RESET} [Akun {idx}] {lbl} ────> {badge}")
+                time.sleep(0.02)
+
+            if len(accounts) > limit_show:
+                rem = len(accounts) - limit_show
+                print(f" {C_CYAN}│   └──{C_RESET} {C_DIM}... dan {rem} akun lainnya terdata di database{C_RESET}")
+
+            print(f" {C_CYAN}│{C_RESET}")
+            if not active_accs:
+                print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_RED}✖ Tidak dapat menjalankan task: Tidak ada akun dengan status AKTIF.{C_RESET}")
+                print(f"     {C_YELLOW}Semua akun saat ini berstatus 'PERLU LOGIN' atau belum memiliki cookie valid.{C_RESET}")
+                print(f"     {C_DIM}Silakan periksa atau tambahkan cookie aktif terlebih dahulu di menu [4] Status Cookie.{C_RESET}")
+                input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+                continue
+
+            print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_GREEN}✓ Terdeteksi {len(active_accs)} akun dengan sesi AKTIF siap menjalankan ulasan.{C_RESET}")
+
+            businesses = cur_status.get("businesses", [])
             print_businesses(businesses)
             if not businesses:
                 input(" Tekan Enter untuk kembali...")
@@ -991,16 +1098,19 @@ def interactive_menu(client: ServerClient):
                     time.sleep(1)
                     continue
                 bid = int(bid_in)
+                target_biz = next((b for b in businesses if b.get("id") == bid), None)
+                biz_name = target_biz.get("name", f"Bisnis #{bid}") if target_biz else f"Bisnis #{bid}"
 
-                slots_in = input(f" {C_GREEN}Jumlah Browser / Akun Paralel (1-6, default 1): {C_RESET}").strip() or "1"
-                slots = max(1, min(6, int(slots_in) if slots_in.isdigit() else 1))
+                max_slots = max(1, min(6, len(active_accs)))
+                slots_in = input(f" {C_GREEN}Jumlah Browser / Akun Paralel (1-{max_slots}, default 1): {C_RESET}").strip() or "1"
+                slots = max(1, min(max_slots, int(slots_in) if slots_in.isdigit() else 1))
 
                 stars_in = input(f" {C_GREEN}Rating Bintang (1-5, default 5): {C_RESET}").strip() or "5"
                 stars = max(1, min(5, int(stars_in) if stars_in.isdigit() else 5))
 
-                confirm = input(f"\n {C_BOLD}Jalankan {slots} ulasan bintang {stars} untuk ID {bid} sekarang? [Y/n]: {C_RESET}").strip().lower()
+                confirm = input(f"\n {C_BOLD}Jalankan {slots} ulasan bintang {stars} untuk '{biz_name}' (ID {bid}) sekarang? [Y/n]: {C_RESET}").strip().lower()
                 if confirm in ("", "y", "yes"):
-                    run_task_stream(client, bid, count=slots, star_rating=stars)
+                    run_task_stream(client, bid, count=slots, star_rating=stars, business_name=biz_name, active_accounts=active_accs)
             except Exception as exc:
                 print(f" {C_RED}Error: {exc}{C_RESET}")
 
