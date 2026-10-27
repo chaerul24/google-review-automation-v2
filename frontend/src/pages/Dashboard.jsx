@@ -43,7 +43,8 @@ import {
   CheckCheck,
   Radio,
   ArrowUpRight,
-  Info
+  Info,
+  User
 } from 'lucide-react';
 import { api } from '../api/client';
 
@@ -99,6 +100,20 @@ export default function Dashboard({ onLogout }) {
   const [isCheckingNames, setIsCheckingNames] = useState(false);
   const [data, setData] = useState(null);
   const [cliStatus, setCliStatus] = useState(null);
+
+  // Profile Dropdown State
+  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
+  const profileDropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (profileDropdownRef.current && !profileDropdownRef.current.contains(e.target)) {
+        setProfileDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Chart Interactive States
   const [chartHoverIdx, setChartHoverIdx] = useState(null);
@@ -712,40 +727,111 @@ export default function Dashboard({ onLogout }) {
             </div>
           </div>
 
-          {/* Quick Header Actions */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            {/* Live Check Google MyAccount Button */}
+          {/* User Profile Dropdown Button */}
+          <div className="relative shrink-0" ref={profileDropdownRef}>
             <button
-              onClick={handleCheckAccountNames}
-              disabled={isCheckingNames}
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors cursor-pointer disabled:opacity-50"
-              title="Periksa nama profil akun & status sesi ke Google MyAccount"
+              onClick={() => setProfileDropdownOpen((prev) => !prev)}
+              aria-label="Menu Profil"
+              className="flex items-center gap-2 p-1 sm:px-2.5 sm:py-1.5 rounded-full sm:rounded-xl hover:bg-slate-100 transition-all border border-transparent hover:border-slate-200 cursor-pointer group"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isCheckingNames ? 'animate-spin' : ''}`} />
-              <span className="hidden md:inline">
-                {isCheckingNames ? 'Memindai Google...' : 'Cek Nama Akun Live'}
-              </span>
-              <span className="md:hidden">Cek</span>
+              <div className="w-8 h-8 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold text-xs ring-2 ring-slate-100 group-hover:ring-blue-500/30 transition-all shrink-0">
+                <User className="w-4 h-4 text-slate-200" />
+              </div>
+              <div className="hidden sm:block text-left min-w-0">
+                <span className="block text-xs font-bold text-slate-900 leading-tight">Admin</span>
+                <span className="block text-[10px] text-emerald-600 font-semibold font-mono leading-tight">ONLINE</span>
+              </div>
+              <ChevronDown
+                className={`w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600 transition-transform hidden sm:block ${
+                  profileDropdownOpen ? 'rotate-180' : ''
+                }`}
+              />
             </button>
 
-            {/* Fast Run Review Bot Modal trigger */}
-            <button
-              onClick={() => setShowFastRunModal(true)}
-              className="flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors cursor-pointer"
-            >
-              <Play className="w-3.5 h-3.5 fill-current" />
-              <span className="hidden sm:inline">Jalankan Task</span>
-              <span className="sm:hidden">Run</span>
-            </button>
+            {/* Profile Dropdown Menu */}
+            {profileDropdownOpen && (
+              <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl border border-slate-200/90 shadow-xl z-50 overflow-hidden font-sans py-1.5 divide-y divide-slate-100 transition-all">
+                {/* Header Profile Info */}
+                <div className="px-4 py-3 bg-slate-50/80">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold text-sm ring-2 ring-emerald-500/30 shrink-0">
+                      <User className="w-5 h-5 text-emerald-400" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-bold text-sm text-slate-900 truncate">Administrator</p>
+                      <p className="text-xs text-slate-500 truncate">admin@autobotix.my.id</p>
+                      <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-semibold text-emerald-700 bg-emerald-100/60 px-2 py-0.5 rounded-full">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Master Admin
+                      </span>
+                    </div>
+                  </div>
+                </div>
 
-            {/* Emergency Stop */}
-            <button
-              onClick={handleEmergencyStop}
-              className="p-1.5 sm:p-2 rounded-xl text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-              title="Emergency Stop (Hentikan semua worker & browser)"
-            >
-              <Square className="w-4 h-4" />
-            </button>
+                {/* Quick Actions in Dropdown */}
+                <div className="p-1.5 space-y-0.5">
+                  {/* Cek Nama Akun Live */}
+                  <button
+                    onClick={() => {
+                      setProfileDropdownOpen(false);
+                      handleCheckAccountNames();
+                    }}
+                    disabled={isCheckingNames}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-emerald-700 rounded-xl transition-colors cursor-pointer text-left disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-4 h-4 text-emerald-600 ${isCheckingNames ? 'animate-spin' : ''}`} />
+                    <div>
+                      <p className="font-semibold">{isCheckingNames ? 'Memindai Google...' : 'Cek Nama Akun Live'}</p>
+                      <p className="text-[10px] text-slate-500">Verifikasi profil sesi Google</p>
+                    </div>
+                  </button>
+
+                  {/* Jalankan Task Bot */}
+                  <button
+                    onClick={() => {
+                      setProfileDropdownOpen(false);
+                      setShowFastRunModal(true);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-blue-700 rounded-xl transition-colors cursor-pointer text-left"
+                  >
+                    <Play className="w-4 h-4 text-blue-600 fill-current" />
+                    <div>
+                      <p className="font-semibold">Luncurkan Task Bot</p>
+                      <p className="text-[10px] text-slate-500">Mulai Chromium multi-display</p>
+                    </div>
+                  </button>
+
+                  {/* Emergency Stop */}
+                  <button
+                    onClick={() => {
+                      setProfileDropdownOpen(false);
+                      handleEmergencyStop();
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-rose-50 hover:text-rose-700 rounded-xl transition-colors cursor-pointer text-left"
+                  >
+                    <Square className="w-4 h-4 text-rose-600" />
+                    <div>
+                      <p className="font-semibold text-rose-600">Emergency Stop</p>
+                      <p className="text-[10px] text-rose-500/80">Hentikan semua worker & browser</p>
+                    </div>
+                  </button>
+                </div>
+
+                {/* Logout Action */}
+                <div className="p-1.5">
+                  <button
+                    onClick={() => {
+                      setProfileDropdownOpen(false);
+                      handleLogout();
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer text-left"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Keluar dari Sesi</span>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </header>
 
