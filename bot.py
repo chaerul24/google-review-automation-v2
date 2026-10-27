@@ -352,6 +352,15 @@ def post_review(
             chromium_args.append(f"--load-extension={cookie_editor_dir}")
             db.add_process_log(business_id, "Extension Cookie-Editor dimuat ke Chromium.", email_id)
 
+        # Clean up any stale Chromium Singleton locks before launching
+        for s_file in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            s_path = os.path.join(profile_dir, s_file)
+            if os.path.exists(s_path) or os.path.islink(s_path):
+                try:
+                    os.remove(s_path)
+                except Exception:
+                    pass
+
         verification_url = "https://www.google.com/maps?hl=en"
         sb = sb_cdp.Chrome(
             verification_url,
@@ -363,7 +372,6 @@ def post_review(
             locale_code=fp["locale"],
             chromium_arg=",".join(chromium_args),
             disable_features="SigninIntercept,ChromeWhatsNewUI,AccountConsistency",
-            port=9222 + int(slot_index or 0),
         )
         sb.maximize()
         sb.sleep(2)
@@ -626,6 +634,15 @@ def delete_own_review_on_maps(email, maps_url, business_name, email_id=None, bus
             "--disable-fre",
             "--window-position=0,0",
         ]
+        # Clean up any stale Chromium Singleton locks before launching
+        for s_file in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            s_path = os.path.join(profile_dir, s_file)
+            if os.path.exists(s_path) or os.path.islink(s_path):
+                try:
+                    os.remove(s_path)
+                except Exception:
+                    pass
+
         sb = sb_cdp.Chrome(
             target,
             headed=True,
@@ -636,7 +653,6 @@ def delete_own_review_on_maps(email, maps_url, business_name, email_id=None, bus
             locale_code="id-ID",
             chromium_arg=",".join(chromium_args),
             disable_features="SigninIntercept,ChromeWhatsNewUI,AccountConsistency",
-            port=9222 + int(slot_index or 0),
         )
         sb.maximize()
         sb.sleep(2)
