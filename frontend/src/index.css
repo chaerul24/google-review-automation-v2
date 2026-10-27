@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: #F5F7FB;
+  color: #172033;
+  font-family: 'Plus Jakarta Sans', Inter, system-ui, -apple-system, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F1F5F9;
+}
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94A3B8;
+}
+
+/* No Scrollbar Utility */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Radar Pulse */
+@keyframes radarPulse {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.35); opacity: 0; }
+  100% { transform: scale(0.95); opacity: 0; }
+}
+.radar-pulse {
+  animation: radarPulse 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+}
+
+/* Scanline effect in stream player */
+.stream-scanlines {
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%);
+  background-size: 100% 4px;
+  pointer-events: none;
+}
+
+/* Responsive Dashboard Layout (Prompt Baseline) */
+.autobotix-dashboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
+  max-width: 1780px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Large Desktop (>= 1440px) */
+@media (min-width: 1440px) {
+  .autobotix-dashboard {
+    grid-template-columns: minmax(0, 1.45fr) minmax(380px, 1fr);
+    gap: 14px;
+    padding: 14px;
+  }
+}
+
+/* Laptop (1024px - 1439px) */
+@media (min-width: 1024px) and (max-width: 1439px) {
+  .autobotix-dashboard {
+    grid-template-columns: minmax(0, 1.25fr) minmax(340px, 1fr);
+    gap: 10px;
+    padding: 10px;
+  }
+}
+
+/* Tablet Portrait & Mobile (< 1024px) */
+@media (max-width: 1023px) {
+  .autobotix-dashboard {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 10px;
+  }
+}
+
+/* Small Mobile (< 480px) */
+@media (max-width: 480px) {
+  .autobotix-dashboard {
+    gap: 8px;
+    padding: 6px;
+  }
+}

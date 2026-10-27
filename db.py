@@ -1,4 +1,8 @@
+import hashlib
+import json
+import random
 import sqlite3
+from collections import defaultdict
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
@@ -7,7 +11,7 @@ DB_PATH = "reviews.db"
 
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     try:
@@ -75,15 +79,9 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT UNIQUE NOT NULL,
                 cookie_json TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
-            -- Google cookies per email (JSON dari browser)
-            CREATE TABLE IF NOT EXISTS cookies (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT UNIQUE NOT NULL,
-                cookie_json TEXT NOT NULL,
+                status TEXT DEFAULT 'unknown',
+                last_checked_at TIMESTAMP,
+                error_reason TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -99,6 +97,105 @@ def init_db():
                 FOREIGN KEY (review_id) REFERENCES reviews(id)
             );
         """)
+    migrate_add_cookie_session_columns()
+    migrate_add_screen_count()
+    migrate_add_gemini_config()
+    init_templates_and_campaigns_db()
+    ensure_all_businesses_have_config()
+    sync_active_cookies_to_emails()
+
+
+def sync_active_cookies_to_emails():
+    with get_db() as conn:
+        conn.execute("""
+            UPDATE emails
+            SET flagged = 0, fail_count = 0
+            WHERE email IN (SELECT email FROM cookies WHERE status = 'active')
+        """)
+
+
+def ensure_all_businesses_have_config():
+    with get_db() as conn:
+        conn.execute("""
+            INSERT OR IGNORE INTO review_configs
+            (business_id, business_description, review_style, star_1_count, star_2_count, star_3_count, star_4_count, star_5_count, delay_seconds)
+            SELECT id, '', 'random', 0, 0, 0, 0, 0, 60
+            FROM businesses
+            WHERE id NOT IN (SELECT business_id FROM review_configs)
+        """)
+
+
+def migrate_autobotix():
+    """Non-destructive inventory tables for the AutoBotix read-only module."""
+    with get_db() as conn:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS ab_tunnels (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, uuid TEXT, status TEXT, status_source TEXT, config_file TEXT, observed_at TEXT, evidence TEXT);
+        CREATE TABLE IF NOT EXISTS ab_domains (id INTEGER PRIMARY KEY, hostname TEXT NOT NULL UNIQUE, tunnel_name TEXT, tunnel_uuid TEXT, config_file TEXT, ingress_rule TEXT, target_url TEXT, target_host TEXT, target_port INTEGER, proxy_type TEXT, service_name TEXT, container_name TEXT, project_path TEXT, framework TEXT, upstream_status TEXT, public_https_status TEXT, public_https_reason TEXT, project_mapping_status TEXT, evidence TEXT, confidence TEXT, observed_at TEXT, source TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS ab_health_checks (id INTEGER PRIMARY KEY, domain_id INTEGER NOT NULL, layer TEXT NOT NULL, status TEXT NOT NULL, http_status INTEGER, reason TEXT, duration_ms REAL, checked_at TEXT NOT NULL, source TEXT NOT NULL, FOREIGN KEY(domain_id) REFERENCES ab_domains(id));
+        CREATE TABLE IF NOT EXISTS ab_findings (id INTEGER PRIMARY KEY, domain_id INTEGER, severity TEXT NOT NULL, finding TEXT NOT NULL, evidence TEXT, recommendation TEXT, observed_at TEXT, source TEXT NOT NULL, FOREIGN KEY(domain_id) REFERENCES ab_domains(id));
+        CREATE TABLE IF NOT EXISTS ab_resource_metrics (id INTEGER PRIMARY KEY, metric TEXT NOT NULL, value REAL, unit TEXT NOT NULL, scope TEXT NOT NULL, observed_at TEXT NOT NULL, validity TEXT NOT NULL, source TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS ab_services (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, port INTEGER, project_path TEXT, status TEXT, observed_at TEXT, source TEXT NOT NULL, evidence TEXT);
+        CREATE TABLE IF NOT EXISTS ab_activity_logs (id INTEGER PRIMARY KEY, actor TEXT NOT NULL, action TEXT NOT NULL, target TEXT, outcome TEXT NOT NULL, message TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE INDEX IF NOT EXISTS idx_ab_health_domain_time ON ab_health_checks(domain_id, checked_at DESC);
+        """)
+
+
+def log_autobotix_activity(actor, action, target, outcome, message=None):
+    with get_db() as conn:
+        conn.execute("INSERT INTO ab_activity_logs(actor,action,target,outcome,message) VALUES(?,?,?,?,?)", (actor, action, target, outcome, message))
+
+
+def get_autobotix_domains(search="", status=""):
+    query = "SELECT * FROM ab_domains WHERE 1=1"
+    params = []
+    if search:
+        query += " AND hostname LIKE ?"; params.append(f"%{search}%")
+    if status:
+        query += " AND upstream_status = ?"; params.append(status)
+    query += " ORDER BY hostname"
+    with get_db() as conn:
+        return [dict(r) for r in conn.execute(query, params).fetchall()]
+
+
+def get_autobotix_domain(domain_id):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM ab_domains WHERE id=?", (domain_id,)).fetchone()
+        if not row: return None
+        result = dict(row)
+        result["history"] = [dict(r) for r in conn.execute("SELECT * FROM ab_health_checks WHERE domain_id=? ORDER BY checked_at DESC LIMIT 30", (domain_id,)).fetchall()]
+        result["findings"] = [dict(r) for r in conn.execute("SELECT * FROM ab_findings WHERE domain_id=? ORDER BY id DESC", (domain_id,)).fetchall()]
+        return result
+
+
+def get_autobotix_tunnels():
+    with get_db() as conn:
+        return [dict(r) for r in conn.execute("SELECT t.*, COUNT(d.id) AS domain_count FROM ab_tunnels t LEFT JOIN ab_domains d ON d.tunnel_name=t.name GROUP BY t.id ORDER BY t.name").fetchall()]
+
+
+def get_autobotix_tunnel(tunnel_id):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM ab_tunnels WHERE id=?", (tunnel_id,)).fetchone()
+        if not row: return None
+        result = dict(row); result["domains"] = [dict(r) for r in conn.execute("SELECT * FROM ab_domains WHERE tunnel_name=? ORDER BY hostname", (result["name"],)).fetchall()]
+        return result
+
+
+def get_autobotix_summary():
+    """Inventory counts remain historical; callers must display their source/time."""
+    with get_db() as conn:
+        return dict(conn.execute("""
+            SELECT
+              (SELECT COUNT(*) FROM ab_tunnels) AS tunnel_count,
+              (SELECT COUNT(*) FROM ab_domains) AS domain_count,
+              (SELECT COUNT(*) FROM ab_services) AS service_count,
+              (SELECT COUNT(*) FROM ab_domains WHERE upstream_status = 'healthy') AS historical_healthy_domains,
+              (SELECT MAX(observed_at) FROM ab_domains) AS inventory_observed_at
+        """).fetchone())
+
+
+def get_autobotix_services():
+    with get_db() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM ab_services ORDER BY name").fetchall()]
 
 
 # ── Businesses ────────────────────────────────────────────────────────────────
@@ -127,7 +224,15 @@ def get_business(business_id):
 
 def add_business(name, url):
     with get_db() as conn:
-        conn.execute("INSERT INTO businesses (name, url) VALUES (?, ?)", (name, url))
+        cur = conn.execute("INSERT INTO businesses (name, url) VALUES (?, ?)", (name, url))
+        biz_id = cur.lastrowid
+        conn.execute(
+            """INSERT OR IGNORE INTO review_configs
+               (business_id, business_description, review_style, star_1_count, star_2_count, star_3_count, star_4_count, star_5_count, delay_seconds)
+               VALUES (?, '', 'random', 0, 0, 0, 0, 0, 60)""",
+            (biz_id,),
+        )
+        return biz_id
 
 
 def delete_business(business_id):
@@ -143,9 +248,45 @@ def delete_business(business_id):
 def get_all_emails():
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM emails ORDER BY created_at ASC"
+            """SELECT e.*,
+                      c.cookie_json,
+                      c.status AS cookie_status,
+                      c.updated_at AS cookie_updated_at,
+                      c.error_reason AS cookie_error_reason
+               FROM emails e
+               LEFT JOIN cookies c ON e.email = c.email
+               ORDER BY 
+                   (CASE WHEN c.status = 'active' THEN 0 ELSE 1 END) ASC,
+                   COALESCE(e.flagged, 0) ASC,
+                   e.id DESC"""
         ).fetchall()
-        return [dict(r) for r in rows]
+
+        parsed = []
+        sig_counts = defaultdict(int)
+        for r in rows:
+            d = dict(r)
+            sig = None
+            if d.get("cookie_json"):
+                try:
+                    cdata = json.loads(d["cookie_json"])
+                    for ck in cdata:
+                        if ck.get("name") in ("SID", "SAPISID", "__Secure-1PSID"):
+                            val_str = str(ck.get("value") or "")
+                            if val_str:
+                                sig = hashlib.sha256(val_str.encode("utf-8")).hexdigest()[:8]
+                                break
+                except Exception:
+                    pass
+            d.pop("cookie_json", None)  # Don't expose raw cookie JSON
+            d["session_hash"] = sig
+            if sig:
+                sig_counts[sig] += 1
+            parsed.append(d)
+
+        for d in parsed:
+            d["is_duplicate"] = bool(d.get("session_hash") and sig_counts[d["session_hash"]] > 1)
+
+        return parsed
 
 
 def count_emails():
@@ -172,6 +313,51 @@ def count_reviewed_for_business(business_id):
             (business_id,),
         ).fetchone()
         return row["cnt"]
+
+
+def get_analytics_summary():
+    """Aggregated stats and trend metrics for professional SaaS dashboard."""
+    with get_db() as conn:
+        # Star distribution
+        star_counts = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+        rows = conn.execute(
+            "SELECT star_rating, COUNT(*) as count FROM reviews WHERE status = 'reviewed' AND star_rating IS NOT NULL GROUP BY star_rating"
+        ).fetchall()
+        for r in rows:
+            rating = r["star_rating"]
+            if rating in star_counts:
+                star_counts[rating] = r["count"]
+
+        # 7-day trend
+        trend_rows = conn.execute(
+            "SELECT DATE(COALESCE(reviewed_at, created_at)) as day, COUNT(*) as count "
+            "FROM reviews WHERE status = 'reviewed' "
+            "GROUP BY day ORDER BY day DESC LIMIT 7"
+        ).fetchall()
+        daily_trends = [{"day": r["day"], "count": r["count"]} for r in reversed(trend_rows)]
+        if not daily_trends:
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            daily_trends = [{"day": today_str, "count": 0}]
+
+        total_reviewed = conn.execute("SELECT COUNT(*) FROM reviews WHERE status = 'reviewed'").fetchone()[0]
+        total_pending = conn.execute("SELECT COUNT(*) FROM reviews WHERE status = 'pending'").fetchone()[0]
+        total_failed = conn.execute("SELECT COUNT(*) FROM reviews WHERE status IN ('failed', 'flagged')").fetchone()[0]
+        total_attempts = total_reviewed + total_failed
+        success_rate = round((total_reviewed / total_attempts * 100), 1) if total_attempts > 0 else 100.0
+
+        total_cookies = conn.execute("SELECT COUNT(*) FROM cookies").fetchone()[0]
+        valid_cookies = conn.execute("SELECT COUNT(*) FROM cookies WHERE status = 'active' OR status IS NULL").fetchone()[0]
+        cookie_health = round((valid_cookies / total_cookies * 100), 1) if total_cookies > 0 else 100.0
+
+        return {
+            "star_distribution": star_counts,
+            "daily_trends": daily_trends,
+            "total_reviewed": total_reviewed,
+            "total_pending": total_pending,
+            "total_failed": total_failed,
+            "success_rate": success_rate,
+            "cookie_health": cookie_health,
+        }
 
 
 def add_email(email, password, totp_secret=None):
@@ -230,15 +416,19 @@ def get_review_for_business(review_id, business_id):
 def get_pending_reviews(business_id):
     """Emails assigned to this business run that haven't been posted yet.
     Excludes emails that have been flagged after too many failures.
+    Prioritizes accounts with active cookies.
     """
     with get_db() as conn:
         rows = conn.execute(
-            """SELECT r.*, e.email, e.password, e.totp_secret
+            """SELECT r.*, e.email, e.password, e.totp_secret, c.status AS cookie_status
                FROM reviews r
                JOIN emails e ON e.id = r.email_id
+               LEFT JOIN cookies c ON e.email = c.email
                WHERE r.business_id = ? AND r.status = 'pending'
-                 AND e.flagged = 0
-               ORDER BY r.created_at ASC""",
+                 AND COALESCE(e.flagged, 0) = 0
+               ORDER BY 
+                   (CASE WHEN c.status = 'active' THEN 0 ELSE 1 END) ASC,
+                   r.created_at ASC""",
             (business_id,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -263,13 +453,20 @@ def create_review_jobs(business_id, star_list, type_list=None, language_list=Non
         effective_types.append('medium')
     effective_types = effective_types[:n]
 
-    # Pad language_list with 'English' if shorter than star_list
+    # Pad language_list with 'Indonesian' if shorter than star_list
     effective_langs = list(language_list or [])
     while len(effective_langs) < n:
-        effective_langs.append('English')
+        effective_langs.append('Indonesian')
     effective_langs = effective_langs[:n]
 
     with get_db() as conn:
+        # Sync: Any email that has an active cookie in cookies table is unflagged
+        conn.execute("""
+            UPDATE emails
+            SET flagged = 0, fail_count = 0
+            WHERE email IN (SELECT email FROM cookies WHERE status = 'active')
+        """)
+
         # Emails already assigned to this business with pending status
         pending_email_ids = {
             r["email_id"]
@@ -279,33 +476,97 @@ def create_review_jobs(business_id, star_list, type_list=None, language_list=Non
             ).fetchall()
         }
 
-        # Emails already assigned to this business (any status)
-        used = {
+        # Emails that have completed a review or are currently reviewing or pending
+        active_or_done = {
             r["email_id"]
             for r in conn.execute(
-                "SELECT email_id FROM reviews WHERE business_id = ?", (business_id,)
+                "SELECT email_id FROM reviews WHERE business_id = ? AND status IN ('reviewed', 'reviewing', 'pending')",
+                (business_id,),
             ).fetchall()
         }
 
-        # Pull enough fresh emails from the pool
+        # Any previous failed or flagged review rows for this business that can be retried
+        recoverable_reviews = {
+            r["email_id"]: r["id"]
+            for r in conn.execute(
+                "SELECT email_id, id FROM reviews WHERE business_id = ? AND status IN ('failed', 'flagged')",
+                (business_id,),
+            ).fetchall()
+        }
+
+        # Pull unflagged emails from pool that are not in active_or_done
+        # Prioritize active cookies, deduplicate sessions, and shuffle randomly
         all_emails = conn.execute(
-            "SELECT id FROM emails WHERE COALESCE(flagged, 0) = 0 ORDER BY created_at ASC"
+            """SELECT e.id, e.email, c.cookie_json, c.status AS cookie_status
+               FROM emails e
+               LEFT JOIN cookies c ON e.email = c.email
+               WHERE COALESCE(e.flagged, 0) = 0"""
         ).fetchall()
-        available = [
-            r["id"] for r in all_emails
-            if r["id"] not in used
-            and (allowed_email_ids is None or r["id"] in set(allowed_email_ids))
-        ]
+
+        seen_emails = set()
+        seen_sessions = set()
+        active_cookie_ids = []
+        other_ids = []
+
+        for r_row in all_emails:
+            r = dict(r_row)
+            if r["id"] in active_or_done:
+                continue
+            if allowed_email_ids is not None and r["id"] not in set(allowed_email_ids):
+                continue
+            if r["email"] in seen_emails:
+                continue
+            seen_emails.add(r["email"])
+
+            # Deduplicate session tokens so the same Google account is never assigned across multiple slots
+            sess_sig = None
+            if r.get("cookie_json"):
+                try:
+                    citems = json.loads(r["cookie_json"])
+                    if isinstance(citems, list):
+                        for ck in citems:
+                            if ck.get("name") in ("SID", "SAPISID", "__Secure-1PSID") and ck.get("value"):
+                                sess_sig = hashlib.sha256(str(ck["value"]).encode()).hexdigest()[:12]
+                                break
+                except Exception:
+                    pass
+
+            if sess_sig:
+                if sess_sig in seen_sessions:
+                    # Skip duplicate session token from the same Google account
+                    continue
+                seen_sessions.add(sess_sig)
+
+            if r["cookie_status"] == "active":
+                active_cookie_ids.append(r["id"])
+            else:
+                other_ids.append(r["id"])
+
+        # Randomize selection: shuffle active accounts and other accounts so assignments are random
+        random.shuffle(active_cookie_ids)
+        random.shuffle(other_ids)
+        available = active_cookie_ids + other_ids
 
         count = 0
         for idx, (star, rtype, lang) in enumerate(zip(star_list, effective_types, effective_langs)):
             if idx >= len(available):
                 break
-            conn.execute(
-                "INSERT INTO reviews (email_id, business_id, star_rating, review_type, review_language, status) "
-                "VALUES (?, ?, ?, ?, ?, 'pending')",
-                (available[idx], business_id, star, rtype, lang),
-            )
+            email_id = available[idx]
+            if email_id in recoverable_reviews:
+                # Reuse and reactivate existing failed or flagged review row
+                conn.execute(
+                    """UPDATE reviews
+                       SET status = 'pending', star_rating = ?, review_type = ?, review_language = ?,
+                           review_text = NULL, reviewed_at = NULL, created_at = CURRENT_TIMESTAMP
+                       WHERE id = ?""",
+                    (star, rtype, lang, recoverable_reviews[email_id]),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO reviews (email_id, business_id, star_rating, review_type, review_language, status) "
+                    "VALUES (?, ?, ?, ?, ?, 'pending')",
+                    (email_id, business_id, star, rtype, lang),
+                )
             count += 1
         return count, len(pending_email_ids)
 
@@ -326,6 +587,30 @@ def migrate_add_delay_seconds():
         if "delay_seconds" not in cols:
             conn.execute(
                 "ALTER TABLE review_configs ADD COLUMN delay_seconds INTEGER DEFAULT 60"
+            )
+
+
+def migrate_add_screen_count():
+    """Add screen_count column if it doesn't exist (safe to call multiple times)."""
+    with get_db() as conn:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(review_configs)").fetchall()]
+        if "screen_count" not in cols:
+            conn.execute(
+                "ALTER TABLE review_configs ADD COLUMN screen_count INTEGER DEFAULT 3"
+            )
+
+
+def migrate_add_gemini_config():
+    """Add gemini_token and business_category columns if they don't exist."""
+    with get_db() as conn:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(review_configs)").fetchall()]
+        if "gemini_token" not in cols:
+            conn.execute(
+                "ALTER TABLE review_configs ADD COLUMN gemini_token TEXT DEFAULT ''"
+            )
+        if "business_category" not in cols:
+            conn.execute(
+                "ALTER TABLE review_configs ADD COLUMN business_category TEXT DEFAULT ''"
             )
 
 
@@ -397,6 +682,15 @@ def unflag_email(email_id):
         return result.rowcount > 0
 
 
+def unflag_all_emails():
+    """Reset flagged and fail_count for all accounts in the pool."""
+    with get_db() as conn:
+        result = conn.execute(
+            "UPDATE emails SET flagged = 0, fail_count = 0"
+        )
+        return result.rowcount
+
+
 def reset_stuck_reviewing():
     """Reset any jobs stuck in 'reviewing' state back to 'pending'.
     Called on worker startup to recover from a crash or kill signal."""
@@ -441,6 +735,27 @@ def reset_review(review_id):
             "star_rating = NULL, reviewed_at = NULL WHERE id = ?",
             (review_id,),
         )
+
+
+def reset_all_reviews_for_business(business_id):
+    """Reset all reviews for a business to pending state so they can be re-run."""
+    with get_db() as conn:
+        cur = conn.execute(
+            """UPDATE reviews
+               SET status = 'pending', review_text = NULL, star_rating = COALESCE(star_rating, 5), reviewed_at = NULL
+               WHERE business_id = ?""",
+            (business_id,),
+        )
+        conn.execute("DELETE FROM process_logs WHERE business_id = ?", (business_id,))
+        return cur.rowcount
+
+
+def delete_all_reviews_for_business(business_id):
+    """Delete all reviews and associated process logs for a business (Dark Mode - Hapus Komentar)."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM process_logs WHERE business_id = ?", (business_id,))
+        cur = conn.execute("DELETE FROM reviews WHERE business_id = ?", (business_id,))
+        return cur.rowcount
 
 
 def delete_review(review_id):
@@ -526,10 +841,28 @@ def get_review_config(business_id):
         row = conn.execute(
             "SELECT * FROM review_configs WHERE business_id = ?", (business_id,)
         ).fetchone()
-        return dict(row) if row else None
+        if row:
+            return dict(row)
+        biz = conn.execute("SELECT id FROM businesses WHERE id = ?", (business_id,)).fetchone()
+        if biz:
+            conn.execute(
+                """INSERT OR IGNORE INTO review_configs
+                   (business_id, business_description, review_style, star_1_count, star_2_count, star_3_count, star_4_count, star_5_count, delay_seconds)
+                   VALUES (?, '', 'random', 0, 0, 0, 0, 0, 60)""",
+                (business_id,),
+            )
+            created = conn.execute(
+                "SELECT * FROM review_configs WHERE business_id = ?", (business_id,)
+            ).fetchone()
+            if created:
+                return dict(created)
+        return None
 
 
 def save_review_config(business_id, config):
+    screen_count = max(1, min(6, int(config.get("screen_count") or 6)))
+    gemini_token = (config.get("gemini_token") or "").strip()
+    business_category = (config.get("business_category") or "").strip()
     with get_db() as conn:
         existing = conn.execute(
             "SELECT id FROM review_configs WHERE business_id = ?", (business_id,)
@@ -545,6 +878,9 @@ def save_review_config(business_id, config):
                        star_4_count = ?,
                        star_5_count = ?,
                        delay_seconds = ?,
+                       screen_count = ?,
+                       gemini_token = ?,
+                       business_category = ?,
                        updated_at = CURRENT_TIMESTAMP
                    WHERE business_id = ?""",
                 (
@@ -556,6 +892,9 @@ def save_review_config(business_id, config):
                     config["star_4_count"],
                     config["star_5_count"],
                     config.get("delay_seconds", 60),
+                    screen_count,
+                    gemini_token,
+                    business_category,
                     business_id,
                 ),
             )
@@ -564,8 +903,8 @@ def save_review_config(business_id, config):
                 """INSERT INTO review_configs
                        (business_id, business_description, review_style,
                         star_1_count, star_2_count, star_3_count, star_4_count, star_5_count,
-                        delay_seconds)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        delay_seconds, screen_count, gemini_token, business_category)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     business_id,
                     config["business_description"],
@@ -576,18 +915,56 @@ def save_review_config(business_id, config):
                     config["star_4_count"],
                     config["star_5_count"],
                     config.get("delay_seconds", 60),
+                    screen_count,
+                    gemini_token,
+                    business_category,
                 ),
             )
 
 
 # ── Google Cookies ────────────────────────────────────────────────────────────
 
+def enrich_cookies_with_duplicate_info(cookies_list):
+    """Detect if multiple accounts share the same Google session tokens (SID / SAPISID)."""
+    import hashlib
+    sig_map = {}
+    for c in cookies_list:
+        raw = c.get("cookie_json") or ""
+        sig = None
+        try:
+            items = json.loads(raw)
+            if isinstance(items, list):
+                for ck in items:
+                    if isinstance(ck, dict) and ck.get("name") in ("SID", "SAPISID", "__Secure-1PSID"):
+                        val = str(ck.get("value") or "").strip()
+                        if val:
+                            sig = hashlib.sha256(val.encode("utf-8")).hexdigest()[:12]
+                            break
+        except Exception:
+            pass
+        c["_session_sig"] = sig
+        if sig:
+            sig_map.setdefault(sig, []).append(c.get("email"))
+
+    for c in cookies_list:
+        sig = c.get("_session_sig")
+        if sig and len(sig_map.get(sig, [])) > 1:
+            c["is_duplicate"] = True
+            c["duplicate_with"] = [em for em in sig_map[sig] if em != c.get("email")]
+        else:
+            c["is_duplicate"] = False
+            c["duplicate_with"] = []
+        c.pop("_session_sig", None)
+    return cookies_list
+
+
 def get_all_cookies():
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM cookies ORDER BY updated_at DESC"
         ).fetchall()
-        return [dict(r) for r in rows]
+        cookies_list = [dict(r) for r in rows]
+        return enrich_cookies_with_duplicate_info(cookies_list)
 
 
 def get_cookie_for_email(email):
@@ -621,7 +998,12 @@ def save_cookie(email, cookie_json):
 
 def delete_cookie(cookie_id):
     with get_db() as conn:
-        conn.execute("DELETE FROM cookies WHERE id = ?", (cookie_id,))
+        row = conn.execute("SELECT email FROM cookies WHERE id = ?", (cookie_id,)).fetchone()
+        if row:
+            email = row["email"]
+            conn.execute("DELETE FROM cookies WHERE id = ?", (cookie_id,))
+            if email.startswith("google.session."):
+                conn.execute("DELETE FROM emails WHERE email = ?", (email,))
 
 
 def migrate_add_cookies_table():
@@ -632,7 +1014,314 @@ def migrate_add_cookies_table():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT UNIQUE NOT NULL,
                 cookie_json TEXT NOT NULL,
+                status TEXT DEFAULT 'unknown',
+                last_checked_at TIMESTAMP,
+                error_reason TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+    migrate_add_cookie_session_columns()
+
+
+def migrate_add_cookie_session_columns():
+    """Add status, last_checked_at, and error_reason columns to cookies table."""
+    with get_db() as conn:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(cookies)").fetchall()]
+        if "status" not in cols:
+            conn.execute("ALTER TABLE cookies ADD COLUMN status TEXT DEFAULT 'unknown'")
+        if "last_checked_at" not in cols:
+            conn.execute("ALTER TABLE cookies ADD COLUMN last_checked_at TIMESTAMP")
+        if "error_reason" not in cols:
+            conn.execute("ALTER TABLE cookies ADD COLUMN error_reason TEXT")
+
+
+def update_cookie_session_status(email, status, error_reason=None):
+    """Non-destructively update cookie session status and error reason without overwriting cookies."""
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE cookies 
+               SET status = ?, last_checked_at = CURRENT_TIMESTAMP, error_reason = ? 
+               WHERE email = ?""",
+            (status, error_reason, email),
+        )
+
+
+def get_cookie_session_status(email):
+    """Retrieve session status metadata for an email."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, email, status, last_checked_at, error_reason, updated_at FROM cookies WHERE email = ?",
+            (email,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+# ── Review Templates & AI Studio ──────────────────────────────────────────────
+
+def init_templates_and_campaigns_db():
+    """Initializes tables for review studio templates and drip campaign scheduler."""
+    with get_db() as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS review_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'Umum',
+                persona TEXT NOT NULL DEFAULT 'local_guide',
+                star_rating INTEGER NOT NULL DEFAULT 5,
+                prompt_template TEXT NOT NULL,
+                keywords TEXT DEFAULT '',
+                sample_output TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS campaign_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                drip_min_delay INTEGER DEFAULT 30,
+                drip_max_delay INTEGER DEFAULT 90,
+                active_hour_start INTEGER DEFAULT 8,
+                active_hour_end INTEGER DEFAULT 21,
+                anti_spam_jitter INTEGER DEFAULT 25,
+                is_paused INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # Ensure default campaign settings exist
+        row = conn.execute("SELECT id FROM campaign_settings WHERE id = 1").fetchone()
+        if not row:
+            conn.execute("""
+                INSERT INTO campaign_settings (id, drip_min_delay, drip_max_delay, active_hour_start, active_hour_end, anti_spam_jitter, is_paused)
+                VALUES (1, 30, 90, 8, 21, 25, 0)
+            """)
+
+        # Seed initial preset templates if empty
+        count = conn.execute("SELECT COUNT(*) FROM review_templates").fetchone()[0]
+        if count == 0:
+            defaults = [
+                (
+                    "Kafe & Coffee Shop Kekinian",
+                    "Kafe & Kuliner",
+                    "foodie",
+                    5,
+                    "Ulasan kafe modern dengan fokus pada kenikmatan rasa racikan kopi, kenyamanan tempat nugas, keramahan barista, dan fasilitas wi-fi kencang.",
+                    "kopi enak, suasana nyaman, barista ramah, wi-fi kencang, spot foto estetik",
+                    "Salah satu coffee shop terfavorit di kawasan ini! Kopinya nikmat dengan balance rasa yang pas. Tempatnya adem dan nyaman sekali untuk nugas atau santai bersama teman.",
+                ),
+                (
+                    "Klinik Dokter & Layanan Medis",
+                    "Kesehatan",
+                    "local_guide",
+                    5,
+                    "Ulasan klinik kesehatan yang menonjolkan higienitas ruangan, ketenangan suasana, penjelasan dokter yang informatif dan ramah, serta penanganan cepat.",
+                    "dokter ramah, penjelasan detail, tempat bersih, antrean teratur, staf responsif",
+                    "Pelayanan medis yang sangat profesional dan memuaskan. Dokter memeriksa dengan teliti dan komunikatif, menjelaskan kondisi dengan bahasa yang mudah dipahami.",
+                ),
+                (
+                    "Hotel & Penginapan Staycation",
+                    "Hospitality",
+                    "family",
+                    5,
+                    "Ulasan hotel ramah keluarga dengan ulasan kebersihan kamar, keramahan resepsionis, menu sarapan bervariasi, dan lokasi yang strategis.",
+                    "kamar bersih, kasur empuk, sarapan lezat, lokasi strategis, kolam renang anak",
+                    "Pengalaman menginap yang luar biasa menyenangkan bersama keluarga. Kamar sangat bersih, kasur nyaman, dan variasi sarapannya lezat sekali. Anak-anak sangat betah!",
+                ),
+                (
+                    "Bengkel Mobil & Servis Motor",
+                    "Otomotif",
+                    "casual",
+                    5,
+                    "Ulasan bengkel servis dengan fokus transparansi biaya servis, mekanik profesional dan jujur, pengerjaan tepat waktu, serta ruang tunggu yang nyaman.",
+                    "mekanik jujur, estimasi harga transparan, pengerjaan rapi, ruang tunggu adem",
+                    "Sangat puas servis di sini. Mekaniknya jujur dan komunikatif, estimasi biaya dijelaskan di awal tanpa biaya siluman. Pengerjaan rapi dan tepat waktu.",
+                ),
+                (
+                    "Restoran Keluarga & Kuliner Nusantara",
+                    "Kafe & Kuliner",
+                    "family",
+                    5,
+                    "Ulasan restoran santap bersama keluarga dengan pujian kelezatan cita rasa otentik, porsi kenyang, area parkir mobil lapang, dan pelayanan gesit.",
+                    "porsi pas, bumbu meresap, tempat parkir luas, cocok rombongan, harga bersahabat",
+                    "Rekomendasi terbaik untuk makan bersama keluarga besar! Menunya lezat dengan bumbu yang kaya rasa. Area parkir luas dan stafnya sangat sigap melayani.",
+                ),
+                (
+                    "International Traveler / Tourist",
+                    "Hospitality",
+                    "tourist",
+                    5,
+                    "International traveler review highlighting hospitality, clean facilities, English-speaking staff, and great atmosphere.",
+                    "great hospitality, English speaking, clean facility, welcoming atmosphere, easy to find",
+                    "Exceptional experience! The staff was very welcoming and spoke great English. Clean environment and authentic local vibes. Highly recommended for tourists!",
+                ),
+            ]
+            conn.executemany(
+                """INSERT INTO review_templates (title, category, persona, star_rating, prompt_template, keywords, sample_output)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                defaults,
+            )
+
+
+def get_review_templates():
+    """Retrieve all saved review templates ordered by id DESC."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM review_templates ORDER BY id DESC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_review_template(title, category, persona, star_rating, prompt_template, keywords="", sample_output=""):
+    """Create a new review template preset."""
+    with get_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO review_templates (title, category, persona, star_rating, prompt_template, keywords, sample_output)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (title, category, persona, int(star_rating or 5), prompt_template, keywords, sample_output),
+        )
+        return cur.lastrowid
+
+
+def delete_review_template(template_id):
+    """Delete a review template."""
+    with get_db() as conn:
+        conn.execute("DELETE FROM review_templates WHERE id = ?", (template_id,))
+
+
+# ── Drip Campaign & Schedule Engine ───────────────────────────────────────────
+
+def get_campaign_settings():
+    """Get active campaign schedule settings."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM campaign_settings WHERE id = 1").fetchone()
+        if not row:
+            return {
+                "drip_min_delay": 30,
+                "drip_max_delay": 90,
+                "active_hour_start": 8,
+                "active_hour_end": 21,
+                "anti_spam_jitter": 25,
+                "is_paused": 0,
+            }
+        return dict(row)
+
+
+def update_campaign_settings(drip_min_delay, drip_max_delay, active_hour_start, active_hour_end, anti_spam_jitter, is_paused=0):
+    """Update drip campaign schedule parameters."""
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE campaign_settings 
+               SET drip_min_delay = ?, drip_max_delay = ?, active_hour_start = ?, active_hour_end = ?, anti_spam_jitter = ?, is_paused = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE id = 1""",
+            (
+                max(5, int(drip_min_delay or 30)),
+                max(int(drip_min_delay or 30), int(drip_max_delay or 90)),
+                max(0, min(23, int(active_hour_start or 8))),
+                max(0, min(23, int(active_hour_end or 21))),
+                max(0, min(100, int(anti_spam_jitter or 25))),
+                1 if is_paused else 0,
+            ),
+        )
+
+
+def get_scheduled_queue_overview():
+    """Retrieve all pending review jobs across all businesses and calculate smart drip timeline ETAs."""
+    settings = get_campaign_settings()
+    with get_db() as conn:
+        query = """
+            SELECT r.id, r.business_id, r.email_id, r.status, r.star_rating, r.review_type, r.review_language, r.created_at,
+                   b.name AS business_name, b.url AS business_url,
+                   e.email AS email_address, e.flagged AS email_flagged
+            FROM reviews r
+            JOIN businesses b ON r.business_id = b.id
+            JOIN emails e ON r.email_id = e.id
+            WHERE r.status = 'pending'
+            ORDER BY r.id ASC
+        """
+        rows = conn.execute(query).fetchall()
+
+    avg_delay_min = (settings.get("drip_min_delay", 30) + settings.get("drip_max_delay", 90)) / 2
+    jitter = settings.get("anti_spam_jitter", 25) / 100.0
+    active_start = settings.get("active_hour_start", 8)
+    active_end = settings.get("active_hour_end", 21)
+    is_paused = bool(settings.get("is_paused", 0))
+
+    now = datetime.now()
+    scheduled_items = []
+    current_sim_time = now
+
+    for index, r in enumerate(rows):
+        item = dict(r)
+        # Advance time by average delay with jitter variation
+        variance = (1.0 + ((index % 5 - 2) * jitter * 0.5))
+        delay_delta = timedelta(minutes=max(5, avg_delay_min * variance))
+        current_sim_time += delay_delta
+
+        # Adjust for operating hours (skip overnight hours)
+        if current_sim_time.hour < active_start:
+            current_sim_time = current_sim_time.replace(hour=active_start, minute=15)
+        elif current_sim_time.hour >= active_end:
+            current_sim_time = (current_sim_time + timedelta(days=1)).replace(hour=active_start, minute=15)
+
+        item["estimated_run_at"] = current_sim_time.strftime("%Y-%m-%d %H:%M:%S")
+        item["eta_minutes"] = max(1, int((current_sim_time - now).total_seconds() / 60))
+        scheduled_items.append(item)
+
+    # Calculate daily capacity
+    active_hours_per_day = max(1, active_end - active_start) if active_end > active_start else 12
+    daily_capacity = int((active_hours_per_day * 60) / max(10, avg_delay_min))
+
+    return {
+        "settings": settings,
+        "is_paused": is_paused,
+        "total_queued": len(scheduled_items),
+        "daily_capacity": daily_capacity,
+        "active_businesses_count": len(set(i["business_id"] for i in scheduled_items)),
+        "queue": scheduled_items,
+    }
+
+
+def push_direct_review(business_id, email_id, star_rating, review_text, language="Indonesian"):
+    """Directly insert a customized or generated review into pending queue for a specific business and account."""
+    with get_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO reviews (business_id, email_id, star_rating, review_text, review_language, status)
+               VALUES (?, ?, ?, ?, ?, 'pending')""",
+            (int(business_id), int(email_id), int(star_rating or 5), review_text, language),
+        )
+        return cur.lastrowid
+
+
+def get_worker_system_status():
+    """Retrieve detailed real-time worker and virtual display metrics."""
+    with get_db() as conn:
+        active_job = conn.execute("""
+            SELECT r.id, r.star_rating, r.status, b.name AS business_name, e.email
+            FROM reviews r
+            JOIN businesses b ON r.business_id = b.id
+            JOIN emails e ON r.email_id = e.id
+            WHERE r.status = 'in_progress'
+            LIMIT 1
+        """).fetchone()
+
+        recent_logs = conn.execute("""
+            SELECT p.id, p.level, p.message, p.created_at, b.name AS business_name
+            FROM process_logs p
+            LEFT JOIN businesses b ON p.business_id = b.id
+            ORDER BY p.id DESC
+            LIMIT 80
+        """).fetchall()
+
+        total_pending = conn.execute("SELECT COUNT(*) FROM reviews WHERE status = 'pending'").fetchone()[0]
+        total_reviewed_today = conn.execute(
+            "SELECT COUNT(*) FROM reviews WHERE status = 'reviewed' AND DATE(reviewed_at) = DATE('now')"
+        ).fetchone()[0]
+        total_failed_today = conn.execute(
+            "SELECT COUNT(*) FROM reviews WHERE status = 'failed' AND DATE(created_at) = DATE('now')"
+        ).fetchone()[0]
+
+    return {
+        "active_job": dict(active_job) if active_job else None,
+        "recent_logs": [dict(l) for l in reversed(recent_logs)],
+        "total_pending": total_pending,
+        "total_reviewed_today": total_reviewed_today,
+        "total_failed_today": total_failed_today,
+    }
+

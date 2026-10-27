@@ -12,19 +12,15 @@ import sys
 from pathlib import Path
 
 import db
+import session_manager
 
 
 def load_cookie_json(path: str | None) -> tuple[str, list[dict]]:
     raw = Path(path).read_text(encoding="utf-8") if path else sys.stdin.read()
-    payload = json.loads(raw)
-    if not isinstance(payload, list) or not payload:
-        raise ValueError("cookie JSON harus berupa array yang tidak kosong")
-    valid = []
-    for index, item in enumerate(payload):
-        if not isinstance(item, dict) or not item.get("name") or item.get("value") is None:
-            raise ValueError(f"cookie index {index} tidak memiliki name/value yang valid")
-        valid.append(item)
-    return json.dumps(valid, separators=(",", ":")), valid
+    val = session_manager.validate_cookie_payload(raw)
+    if not val.is_valid and val.status == session_manager.SessionStatus.INVALID:
+        raise ValueError(val.reason)
+    return raw, val.sanitized_cookies
 
 
 def main() -> int:
@@ -37,12 +33,15 @@ def main() -> int:
         cookie_json, cookies = load_cookie_json(args.file)
         if "@" not in args.email:
             raise ValueError("email akun tidak valid")
+        val = session_manager.validate_cookie_payload(cookie_json)
         if not args.check_only:
             db.init_db()
             db.migrate_add_cookies_table()
+            db.migrate_add_cookie_session_columns()
             db.save_cookie(args.email.strip(), cookie_json)
+            db.update_cookie_session_status(args.email.strip(), val.status.value, val.reason)
         action = "valid" if args.check_only else "disimpan"
-        print(f"Cookie {action}: akun={args.email.strip()} jumlah={len(cookies)}")
+        print(f"Cookie {action}: akun={args.email.strip()} jumlah={len(cookies)} status={val.status.value}")
         return 0
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         print(f"Gagal import cookie: {exc}", file=sys.stderr)

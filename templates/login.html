@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Login &mdash; Google Review Automation</title>
+  <script>window.__csrfToken = {{ csrf_token|tojson }};</script>
+  <script src="{{ url_for('static', filename='autobotix.js') }}"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='saas.css') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -55,6 +57,7 @@
       {% endif %}
 
       <form method="POST" autocomplete="off" class="space-y-5">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div>
           <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Password Akses</label>
           <div class="relative">

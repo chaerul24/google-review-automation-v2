@@ -1,0 +1,7 @@
+:root { color-scheme: light; --ab-bg:#f8fafc; --ab-panel:#fff; --ab-sidebar:#fff; --ab-text:#172033; --ab-muted:#64748b; --ab-border:#e2e8f0; --ab-accent:#2563eb; --ab-success:#15803d; --ab-warning:#b45309; --ab-danger:#b91c1c; }
+:root[data-theme="dark"] { color-scheme: dark; --ab-bg:#111827; --ab-panel:#182235; --ab-sidebar:#111827; --ab-text:#e5e7eb; --ab-muted:#94a3b8; --ab-border:#2b3850; --ab-accent:#60a5fa; --ab-success:#4ade80; --ab-warning:#fbbf24; --ab-danger:#f87171; }
+body.autobotix { background:var(--ab-bg); color:var(--ab-text); }
+.ab-panel { background:var(--ab-panel); border:1px solid var(--ab-border); border-radius:12px; }
+.ab-table { width:100%; border-collapse:collapse; font-size:.875rem; }.ab-table th,.ab-table td{padding:.75rem;text-align:left;border-bottom:1px solid var(--ab-border)}.ab-table th{color:var(--ab-muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.04em}.ab-scroll{overflow-x:auto}
+.ab-badge{display:inline-flex;align-items:center;padding:.15rem .5rem;border-radius:999px;font-size:.75rem;font-weight:600}.ab-badge--healthy{background:#dcfce7;color:#166534}.ab-badge--unknown{background:#e2e8f0;color:#475569}.ab-badge--down{background:#fee2e2;color:#991b1b}.ab-badge--warning{background:#fef3c7;color:#92400e}
+:root[data-theme="dark"] .ab-badge--healthy{background:#14532d;color:#bbf7d0}:root[data-theme="dark"] .ab-badge--unknown{background:#334155;color:#cbd5e1}:root[data-theme="dark"] .ab-badge--down{background:#7f1d1d;color:#fecaca}:root[data-theme="dark"] .ab-badge--warning{background:#78350f;color:#fde68a}

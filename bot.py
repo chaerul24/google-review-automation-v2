@@ -4,6 +4,9 @@ import os
 import random
 import time
 import traceback
+import concurrent.futures
+import multiprocessing
+import requests
 
 import pyotp
 
@@ -11,6 +14,8 @@ from dotenv import load_dotenv
 from seleniumbase import sb_cdp
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 import db
+import session_manager
+from session_manager import SessionManager, ProfileLock, ProfileLockedError, SessionStatus
 import json as _json
 import re
 import urllib.parse
@@ -20,6 +25,15 @@ log = logging.getLogger(__name__)
 
 PROXY = os.environ.get("PROXY", "")
 print(PROXY)
+
+SLOT_DISPLAYS = {
+    0: ":99",
+    1: ":100",
+    2: ":101",
+    3: ":102",
+    4: ":103",
+    5: ":104",
+}
 
 def get_fingerprint(email):
     """Generate a deterministic fingerprint based on the email address."""
@@ -52,53 +66,269 @@ def get_fingerprint(email):
     }
 
 
-def generate_review(business_name, review_prompt, star_rating, review_type='medium', language='English', review_style='random'):
+def generate_gemini_review(
+    api_key: str,
+    business_name: str,
+    business_category: str = "",
+    star_rating: int = 5,
+    custom_prompt: str = "",
+    review_style: str = "random",
+    language: str = "Indonesian"
+) -> str:
+    """Generate realistic, highly-contextual Google Maps review via Google Gemini REST API.
+    Understands the specific business niche (e.g., Bengkel Otomotif, Kuliner, Klinik, Toko)
+    and tailors industry-specific experiences, staff references, and services accordingly.
+    """
+    if not api_key or not str(api_key).strip():
+        return ""
+
+    category_hint = (business_category or "").strip()
+    if not category_hint:
+        category_hint = "Deteksi otomatis secara cerdas dari nama usaha"
+
+    tone_map = {
+        "formal": "Formal, profesional, sopan, dan mencerminkan pelayanan berkelas serta kemitraan bisnis terpercaya.",
+        "casual": "Santai, ramah, bahasa percakapan sehari-hari khas pelanggan lokal atau anak muda.",
+        "enthusiastic": "Sangat antusias, puas, penuh pujian dan rekomendasi kuat.",
+        "compact": "Singkat dan padat (1-2 kalimat), langsung ke poin pengalaman tanpa basa-basi.",
+        "random": "Alami, variatif, dan wajar layaknya ulasan akun Google Maps organik.",
+    }
+    tone_desc = tone_map.get(str(review_style).lower(), "Natural dan variatif layaknya ulasan pengguna Google Maps.")
+
+    system_instruction = f"""Kamu adalah reviewer lokal asli di Indonesia yang sedang menulis ulasan otentik di Google Maps.
+
+DATA TARGET MAPS:
+- Nama Tempat / Usaha: {business_name}
+- Kategori / Bidang Usaha: {category_hint}
+- Rating Bintang: {star_rating} dari 5 Bintang
+- Gaya Bahasa (Tone): {tone_desc}
+- Kata Kunci / Konteks Tambahan: {custom_prompt or 'Tidak ada'}
+
+INSTRUKSI WAJIB:
+1. KENALI DAN SESUAIKAN DENGAN BIDANG USAHA SECARA SPESIFIK:
+   - Pelajari nama usaha '{business_name}' dan bidang usahanya.
+   - Contoh: Jika ini BENGKEL / OTOMOTIF (seperti Shop&Drive, bengkel mobil/motor, servis ganti oli, aki, shockbreaker, ban), ulasan WAJIB membahas hal nyata berkaitan dengan bengkel (misalnya: montir/mekanik yang teliti dan ramah, pengerjaan cepat, aki/oli original bergaransi, ruang tunggu nyaman/ber-AC, pengecekan kendaraan transparan).
+   - Contoh: Jika RESTORAN/KULINER/CAFE, bahas cita rasa makanan/minuman, bumbu meresap, porsi, suasana tempat, dan keramahan pelayan.
+   - Contoh: Jika KLINIK/APOTEK/KESEHATAN, bahas penanganan dokter/nakes yang sabar, antrean obat tertib, dan kebersihan ruangan.
+   - Contoh: Jika TOKO/SWALAYAN, bahas kelengkapan produk, harga terjangkau, dan kasir cekatan.
+   - JANGAN PERNAH membuat ulasan generik template seperti "tempatnya bagus pelayanan ramah" tanpa menyebutkan konteks usahanya!
+2. KESESUAIAN RATING BINTANG ({star_rating} Bintang):
+   - Jika 5 bintang: Berikan ulasan sangat puas dan rekomendasikan ke pengguna lain.
+   - Jika 4 bintang: Pengalaman memuaskan dengan catatan kecil yang wajar.
+   - Jika 1-2 bintang: Ungkapkan keluhan yang realistis dan sopan tentang aspek teknis atau antrean.
+3. FORMAT PENULISAN:
+   - Gunakan bahasa Indonesia yang wajar dan natural untuk Google Maps.
+   - Panjang ulasan antara 2 sampai 4 kalimat.
+   - Tulis HANYA teks komentar ulasan. JANGAN menyertakan tanda kutip (" "), jangan pakai markdown, dan jangan gunakan kata pengantar."""
+
+    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key.strip()}"
+        payload = {
+            "contents": [{
+                "parts": [{"text": system_instruction}]
+            }],
+            "generationConfig": {
+                "temperature": 0.85,
+                "maxOutputTokens": 300,
+            }
+        }
+        try:
+            resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=12)
+            if resp.status_code == 200:
+                data = resp.json()
+                candidates = data.get("candidates", [])
+                if candidates and "content" in candidates[0]:
+                    parts = candidates[0]["content"].get("parts", [])
+                    if parts and "text" in parts[0]:
+                        text = parts[0]["text"].strip()
+                        if (text.startswith('"') and text.endswith('"')) or (text.startswith("'") and text.endswith("'")):
+                            text = text[1:-1].strip()
+                        if text:
+                            log.info("Gemini AI review successfully generated using %s for '%s' (category: %s)", model, business_name, category_hint)
+                            return text
+            else:
+                log.warning("Gemini model %s returned status %d: %s", model, resp.status_code, resp.text[:200])
+        except Exception as exc:
+            log.warning("Gemini model %s call failed: %s", model, exc)
+
+    return ""
+
+
+def generate_review(business_name, review_prompt, star_rating, review_type='medium', language='English', review_style='random', persona='default', gemini_token=None, business_category=None, business_id=None):
     if review_type == 'no_text':
         return ''
 
-    templates = {
-        'Indonesian': [
-            f"Sangat puas berkunjung ke {business_name}. Tempatnya sangat nyaman, bersih, dan pelayanannya ramah. Sangat direkomendasikan!",
-            f"Pengalaman luar biasa di {business_name}. Pelayanannya cepat dan memuaskan. Pasti akan kembali lagi ke sini.",
-            f"Tempat yang luar biasa! {business_name} memberikan pelayanan dan kualitas terbaik. Sangat puas bintang 5.",
-            f"Pelayanan di {business_name} sangat memuaskan, fasilitas rapi dan nyaman. Rekomendasi banget untuk siapa saja!"
-        ],
-        'English': [
-            f"Outstanding experience at {business_name}! The service was prompt, friendly, and top notch. Highly recommended to everyone!",
-            f"Had a wonderful time visiting {business_name}. Very clean, professional, and welcoming atmosphere. 5 stars all the way!",
-            f"Truly impressed with the quality and great service at {business_name}. Will definitely be coming back again!",
-            f"Great place! Everything at {business_name} was seamless and well organized. Highly satisfied with my visit."
-        ]
-    }
+    # Check for Gemini AI token from parameters, database config, or environment
+    token = (gemini_token or "").strip()
+    category = (business_category or "").strip()
+    if (not token or not category) and business_id:
+        try:
+            cfg = db.get_review_config(business_id)
+            if cfg:
+                if not token:
+                    token = (cfg.get("gemini_token") or "").strip()
+                if not category:
+                    category = (cfg.get("business_category") or "").strip()
+        except Exception:
+            pass
+    if not token:
+        token = os.environ.get("GEMINI_API_KEY", "").strip()
+
+    # Attempt AI contextual generation if token is present
+    if token:
+        try:
+            ai_text = generate_gemini_review(
+                api_key=token,
+                business_name=business_name,
+                business_category=category,
+                star_rating=star_rating,
+                custom_prompt=review_prompt,
+                review_style=review_style,
+                language=language,
+            )
+            if ai_text:
+                return ai_text
+        except Exception as exc:
+            log.warning("Gemini AI generation fallback due to error: %s", exc)
+
     lang_key = 'Indonesian' if str(language).lower() in ('indonesian', 'indonesia', 'id') else 'English'
-    positive = templates.get(lang_key, templates['Indonesian'])
-    negative = {
-        'Indonesian': [
-            f"Pengalaman di {business_name} kurang memuaskan. Pelayanannya perlu diperbaiki dan saya berharap kualitasnya bisa lebih baik.",
-            f"Saya kecewa dengan kunjungan ke {business_name}. Prosesnya tidak nyaman dan hasilnya belum sesuai harapan.",
-            f"Masih banyak hal yang perlu ditingkatkan di {business_name}, terutama pelayanan dan kenyamanan pelanggan."
-        ],
-        'English': [
-            f"My experience at {business_name} was disappointing. The service needs improvement and the overall visit did not meet expectations.",
-            f"I was not satisfied with my visit to {business_name}. The process was inconvenient and the result fell short of expectations.",
-            f"There is still a lot to improve at {business_name}, especially the service and customer experience."
-        ]
-    }.get(lang_key, [])
-    mode = review_style if review_style in ('baik', 'buruk') else random.choice(('baik', 'buruk'))
-    return random.choice(positive if mode == 'baik' else negative)
+    prompt_snippet = f" {review_prompt.strip()}." if review_prompt and len(review_prompt.strip()) > 3 else ""
+
+    if lang_key == 'Indonesian':
+        if persona == 'local_guide':
+            templates_pos = [
+                f"Sebagai Local Guide, saya sangat merekomendasikan {business_name}.{prompt_snippet} Tempatnya tertata rapi, atmosfernya hangat, dan stafnya sangat responsif melayani pelanggan. Area parkirnya juga nyaman.",
+                f"Kunjungan yang sangat berkesan di {business_name}.{prompt_snippet} Kualitas dan standar pelayanannya patut diacungi jempol. Cocok untuk dikunjungi bersama teman atau keluarga. Bintang 5 layak disematkan!",
+            ]
+        elif persona == 'family':
+            templates_pos = [
+                f"Sangat ramah keluarga! Kami sekeluarga merasa sangat nyaman berkunjung ke {business_name}.{prompt_snippet} Tempatnya bersih, luas, dan pelayanannya sabar serta ramah.",
+                f"{business_name} tempat yang pas untuk quality time bareng keluarga.{prompt_snippet} Suasananya tenang dan fasilitasnya sangat terawat. Pasti akan mampir lagi lain waktu.",
+            ]
+        elif persona == 'foodie':
+            templates_pos = [
+                f"Pengalaman yang sangat memuaskan di {business_name}.{prompt_snippet} Rasa dan kualitasnya benar-benar konsisten, penyajian rapi dan pelayanannya cepat. Salah satu spot terbaik di kelasnya!",
+                f"Worth every penny! {business_name} memberikan rasa dan kenyamanan yang melebihi ekspektasi.{prompt_snippet} Sangat recomended buat yang cari kualitas terbaik.",
+            ]
+        elif persona == 'casual':
+            templates_pos = [
+                f"Tempatnya asik banget! Pelayanan di {business_name} cepat dan stafnya ramah.{prompt_snippet} Mantap dan recommended!",
+                f"Suka banget sama vibes di {business_name}. Pelayanannya oke, tempat bersih dan nyaman.{prompt_snippet} Top bintang 5!",
+            ]
+        else:
+            templates_pos = [
+                f"Sangat puas berkunjung ke {business_name}.{prompt_snippet} Tempatnya sangat nyaman, bersih, dan pelayanannya ramah. Sangat direkomendasikan!",
+                f"Pengalaman luar biasa di {business_name}.{prompt_snippet} Pelayanannya cepat dan memuaskan. Pasti akan kembali lagi ke sini.",
+                f"Tempat yang luar biasa! {business_name} memberikan pelayanan dan kualitas terbaik.{prompt_snippet} Sangat puas bintang 5.",
+                f"Pelayanan di {business_name} sangat memuaskan, fasilitas rapi dan nyaman.{prompt_snippet} Rekomendasi banget untuk siapa saja!"
+            ]
+    else:
+        if persona == 'local_guide':
+            templates_pos = [
+                f"As a Google Local Guide, I can confidently recommend {business_name}.{prompt_snippet} The atmosphere is welcoming, staff is remarkably attentive, and overall quality is top tier.",
+                f"A fantastic spot in town! Visiting {business_name} was a delightful experience.{prompt_snippet} Spotless cleanliness, well-managed environment, and great customer care.",
+            ]
+        elif persona == 'family':
+            templates_pos = [
+                f"Such a warm and family-friendly environment at {business_name}.{prompt_snippet} Staff made us feel right at home, and facilities are clean and spacious.",
+            ]
+        elif persona == 'tourist':
+            templates_pos = [
+                f"First time visiting and I am thoroughly impressed by {business_name}!{prompt_snippet} Outstanding hospitality and great communication. A must-visit place!",
+            ]
+        else:
+            templates_pos = [
+                f"Outstanding experience at {business_name}!{prompt_snippet} The service was prompt, friendly, and top notch. Highly recommended to everyone!",
+                f"Had a wonderful time visiting {business_name}.{prompt_snippet} Very clean, professional, and welcoming atmosphere. 5 stars all the way!",
+                f"Truly impressed with the quality and great service at {business_name}.{prompt_snippet} Will definitely be coming back again!",
+                f"Great place! Everything at {business_name} was seamless and well organized.{prompt_snippet} Highly satisfied with my visit."
+            ]
+
+    if star_rating in (1, 2) or review_style == 'buruk':
+        if lang_key == 'Indonesian':
+            negative = [
+                f"Pengalaman di {business_name} kurang memuaskan. Pelayanannya perlu diperbaiki dan saya berharap kualitasnya bisa lebih baik ke depan.",
+                f"Saya sedikit kecewa dengan kunjungan ke {business_name}. Prosesnya agak lambat dan fasilitasnya perlu ditingkatkan.",
+            ]
+        else:
+            negative = [
+                f"My experience at {business_name} was below expectations. The service needs improvement.",
+                f"I was not fully satisfied with my visit to {business_name}. Room for improvement.",
+            ]
+        return random.choice(negative)
+
+    return random.choice(templates_pos)
 
 
-def post_review(email, password, maps_url, star_rating, business_name, review_prompt, email_id, business_id, recovery_email=None, review_type='medium', language='English', review_style='random', totp_secret=None):
-    safe_name = email.replace("@", "_at_").replace(".", "_")
-    profile_dir = os.path.abspath(os.path.join("chrome_profiles", safe_name))
-    os.makedirs(profile_dir, exist_ok=True)
+def setup_authenticated_session(sb, email, target_url="https://www.google.com/maps?hl=en", business_id=None, email_id=None):
+    """Separate cookie loading from action logic.
+    
+    Alur:
+    Pilih akun -> Muat cookie tersimpan -> Terapkan ke browser Chromium di domain google.com -> Verifikasi sesi -> Laporkan status.
+    Jika sesi tidak valid, batalkan proses tanpa mencoba login dengan email/password/TOTP.
+    """
+    sm = SessionManager()
+    db.add_process_log(business_id, f"Memeriksa cookie sesi Google tersimpan untuk akun {email}.", email_id)
+    success, status, reason = sm.restore_session(sb, email, target_url, target_domain="google.com")
+    if not success:
+        db.add_process_log(
+            business_id,
+            f"Sesi cookie akun {email} tidak valid ({status.value}): {reason}. Proses autentikasi dihentikan.",
+            email_id,
+            "error",
+        )
+        return False, status, reason
+
+    db.add_process_log(
+        business_id,
+        f"Sesi akun {email} berhasil diverifikasi di Google Maps ({status.value}). Melanjutkan.",
+        email_id,
+        "success",
+    )
+    return True, status, reason
+
+
+def post_review(
+    email,
+    password,
+    maps_url,
+    star_rating,
+    business_name,
+    review_prompt,
+    email_id,
+    business_id,
+    recovery_email=None,
+    review_type='medium',
+    language='English',
+    review_style='random',
+    totp_secret=None,
+    slot_index=0,
+    total_slots=1,
+    display=None,
+    gemini_token=None,
+    business_category=None,
+):
+    slot_display = display or SLOT_DISPLAYS.get(slot_index, f":{99 + slot_index}")
+    os.environ["DISPLAY"] = slot_display
+
+    profile_dir = session_manager.get_profile_dir(email)
+    lock = ProfileLock(profile_dir)
+    try:
+        lock.acquire()
+    except ProfileLockedError as lock_err:
+        log.warning("Profile directory for %s is locked: %s", email, lock_err)
+        db.add_process_log(business_id, f"Gagal mengakses profil browser (sedang digunakan): {lock_err}", email_id, "error")
+        db.update_review_status(email_id, "failed", None, star_rating)
+        return False
 
     fp = get_fingerprint(email)
     iframe_sel = "iframe[name='goog-reviews-write-widget']"
 
     sb = None
     try:
-        db.add_process_log(business_id, "Membuka browser Chromium.", email_id)
+        slot_label = f" (Slot {slot_index + 1}/{total_slots} pada Display {slot_display})" if total_slots > 1 else f" (Display {slot_display})"
+        db.add_process_log(business_id, f"[{email}] Membuka browser Chromium mandiri{slot_label}.", email_id)
         chromium_args = [
             "--disable-sync",
             "--no-first-run",
@@ -106,7 +336,10 @@ def post_review(email, password, maps_url, star_rating, business_name, review_pr
             "--disable-default-apps",
             "--disable-fre",
             "--disable-chrome-login-prompt",
+            "--window-position=0,0",
         ]
+        win_size_str = fp.get("res") or "1366,768"
+
         cookie_editor_dir = os.environ.get(
             "COOKIE_EDITOR_EXTENSION_DIR",
             os.path.join(
@@ -118,166 +351,36 @@ def post_review(email, password, maps_url, star_rating, business_name, review_pr
         if cookie_editor_dir and os.path.isfile(os.path.join(cookie_editor_dir, "manifest.json")):
             chromium_args.append(f"--load-extension={cookie_editor_dir}")
             db.add_process_log(business_id, "Extension Cookie-Editor dimuat ke Chromium.", email_id)
+
+        verification_url = "https://www.google.com/maps?hl=en"
         sb = sb_cdp.Chrome(
-            "https://accounts.google.com/signin/v2/identifier",
+            verification_url,
             headed=True,
-            user_data_dir=profile_dir,
+            user_data_dir=str(profile_dir),
             proxy=PROXY,
             agent=fp["ua"],
-            window_size=fp["res"],
+            window_size=win_size_str,
             locale_code=fp["locale"],
             chromium_arg=",".join(chromium_args),
             disable_features="SigninIntercept,ChromeWhatsNewUI,AccountConsistency",
+            port=9222 + int(slot_index or 0),
         )
         sb.maximize()
-        # --- Try cookie login first ---
-        sb.sleep(3)
-        cookie_json = db.get_cookie_for_email(email)
-        used_cookie = False
-        if cookie_json:
-            db.add_process_log(business_id, "Mencoba login dengan cookie Google.", email_id)
-            log.info("Cookie found for %s -- injecting to skip login.", email)
-            try:
-                from mycdp import network as _cdp_net
-                cookies_list = _json.loads(cookie_json)
-                cookie_params = []
-                for ck in cookies_list:
-                    name = ck.get("name")
-                    val = ck.get("value")
-                    if not name or val is None:
-                        continue
-                    dom = ck.get("domain") or ".google.com"
-                    path = ck.get("path") or "/"
-                    sec = bool(ck.get("secure", True))
-                    http_only = bool(ck.get("httpOnly", False))
-                    ss = None
-                    ss_val = str(ck.get("sameSite", "")).lower()
-                    if ss_val == "strict":
-                        ss = _cdp_net.CookieSameSite.STRICT
-                    elif ss_val == "lax":
-                        ss = _cdp_net.CookieSameSite.LAX
-                    elif ss_val in ("none", "no_restriction"):
-                        ss = _cdp_net.CookieSameSite.NONE
+        sb.sleep(2)
 
-                    param = _cdp_net.CookieParam(
-                        name=name,
-                        value=str(val),
-                        domain=dom,
-                        path=path,
-                        secure=sec,
-                        http_only=http_only,
-                        same_site=ss,
-                    )
-                    cookie_params.append(param)
-
-                if not cookie_params:
-                    raise ValueError("Cookie JSON tidak berisi cookie valid")
-
-                # Do not mix a newly imported Cookie-Editor session with
-                # cookies left in the account's persistent Chromium profile.
-                # This only clears browser cookies; it does not delete the
-                # profile, saved settings, or the database record.
-                try:
-                    sb.delete_all_cookies()
-                except Exception:
-                    log.debug("Could not clear existing browser cookies", exc_info=True)
-                sb.get("https://www.google.com")
-                sb.sleep(2)
-                sb.set_all_cookies(cookie_params)
-                sb.sleep(2)
-                sb.get("https://myaccount.google.com/?hl=en")
-                sb.sleep(6)
-                cur = sb.get_current_url()
-                if "myaccount.google.com" in cur or "/u/" in cur:
-                    # Google renders the account identity dynamically. Read
-                    # both visible text and identity-bearing DOM attributes;
-                    # SeleniumBase get_text alone can miss those attributes.
-                    identity_blob = sb.execute_script("""
-                        const body = document.body ? document.body.innerText : '';
-                        const nodes = [...document.querySelectorAll('[data-email],[aria-label],[title]')];
-                        const attrs = nodes.map(n => [n.getAttribute('data-email'), n.getAttribute('aria-label'), n.getAttribute('title')].filter(Boolean).join(' '));
-                        return body + '\\n' + attrs.join('\\n');
-                    """) or ""
-                    expected_visible = email.casefold() in str(identity_blob).casefold()
-                    if expected_visible:
-                        log.info("Cookie login OK; Google account detected: %s", email)
-                        used_cookie = True
-                        db.add_process_log(
-                            business_id,
-                            f"Login cookie berhasil. Akun Google terdeteksi: {email}.",
-                            email_id,
-                        )
-                    else:
-                        log.warning("Cookie reached account page but expected account was not visible for %s", email)
-                        db.add_process_log(
-                            business_id,
-                            "Cookie masuk, tetapi nama/email akun Google tidak terverifikasi.",
-                            email_id,
-                            "warning",
-                        )
-                else:
-                    log.warning("Cookie login failed for %s (url: %s), falling back to password", email, cur)
-            except Exception as e:
-                log.warning("Cookie inject error for %s: %s", email, e)
-
-        # A supplied cookie is authoritative: never fall back to typing
-        # credentials when its session cannot be verified.
-        if cookie_json and not used_cookie:
-            raise RuntimeError(
-                "Cookie tersedia tetapi sesi akun Google tidak terverifikasi; "
-                "perbarui cookie secara manual."
-            )
-
-        # --- Password login fallback (only when no cookie was supplied) ---
-        if not used_cookie:
-            db.add_process_log(business_id, "Login dengan kredensial akun Google.", email_id)
-            sb.sleep(5)
-            cur = sb.get_current_url()
-            if "accounts.google.com" in cur:
-                sb.sleep(2)
-                sb.click('input[aria-label="Email or phone"]', timeout=15)
-                sb.sleep(3)
-                sb.type('input[aria-label="Email or phone"]', email, timeout=15)
-                sb.sleep(3)
-                sb.click("#identifierNext", timeout=15)
-                sb.sleep(5)
-                sb.click('input[type="password"]', timeout=30)
-                sb.sleep(3)
-                sb.type('input[type="password"]', password, timeout=30)
-                sb.sleep(3)
-                sb.click("#passwordNext", timeout=15)
-                sb.sleep(5)
-
-                try:
-                    sb.wait_for_element_visible('input[name="totpPin"]', timeout=20)
-                    totp_code = pyotp.TOTP(totp_secret).now() if totp_secret else ""
-                    sb.click('input[name="totpPin"]', timeout=10)
-                    sb.sleep(3)
-                    sb.type('input[name="totpPin"]', totp_code, timeout=10)
-                    sb.sleep(3)
-                    sb.click("#totpNext", timeout=15)
-                    sb.sleep(5)
-                except Exception:
-                    pass
-                try:
-                    sb.sleep(random.uniform(3, 6))
-                    current_url = sb.get_current_url()
-                    english_url = re.sub(r'([?&]hl=)[^&]+', r'\1en', current_url)
-                    english_url = re.sub(r'hl%3D[^%&]+', 'hl%3Den', english_url)
-                    if "hl=" not in urllib.parse.unquote(english_url):
-                        separator = "&" if "?" in english_url else "?"
-                        english_url += f"{separator}hl=en"
-                    sb.get(english_url)
-                    sb.sleep(random.uniform(5, 10))
-                    sb.click_if_visible('button[aria-label="Cancel"]', timeout=10)
-                    sb.sleep(3)
-                    sb.click_if_visible('button[aria-label="Skip"]', timeout=10)
-                except Exception:
-                    pass
+        # ── Step: Setup Authenticated Session via Cookie (NO PASSWORD FALLBACK) ──
+        auth_ok, auth_status, auth_reason = setup_authenticated_session(
+            sb, email, verification_url, business_id=business_id, email_id=email_id
+        )
+        if not auth_ok:
+            log.warning("Authentication failed via cookies for %s: %s", email, auth_reason)
+            # Stop immediately. Do NOT fall back to email, password, or TOTP typing!
+            db.update_review_status(email_id, "failed", None, star_rating)
+            return False
 
         # --- Navigate to Maps listing ---
         db.add_process_log(business_id, "Membuka halaman Google Maps.", email_id)
-        sb.sleep(random.uniform(5, 8))
+        sb.sleep(random.uniform(3, 5))
         sep = "&" if "?" in maps_url else "?"
         target_maps_url = maps_url if "hl=" in maps_url else f"{maps_url}{sep}hl=en"
         sb.get(target_maps_url)
@@ -375,8 +478,20 @@ def post_review(email, password, maps_url, star_rating, business_name, review_pr
         sb.sleep(random.uniform(2, 5))
 
         # Generate review text now that we know the write box is open and star is selected
-        db.add_process_log(business_id, "Membuat teks dan memilih rating review.", email_id)
-        review_text = generate_review(business_name, review_prompt, star_rating, review_type, language, review_style)
+        db.add_process_log(business_id, "Membuat teks ulasan (kontekstual bidang usaha) dan memilih rating.", email_id)
+        review_text = generate_review(
+            business_name,
+            review_prompt,
+            star_rating,
+            review_type=review_type,
+            language=language,
+            review_style=review_style,
+            business_id=business_id,
+            gemini_token=gemini_token,
+            business_category=business_category,
+        )
+        if review_text:
+            db.update_review_status(email_id, "reviewing", review_text, star_rating)
         log.info("Review generated for %s (type=%s, lang=%s)", email, review_type, language)
 
         # Type review text into the textarea inside the iframe (skip for no_text reviews)
@@ -415,8 +530,8 @@ def post_review(email, password, maps_url, star_rating, business_name, review_pr
         return False
 
     finally:
-        if sb is not None:
-            sb.driver.stop()
+        session_manager.close_browser_session(sb)
+        lock.release()
 
 
 def inspect_existing_review(email, maps_url, business_name, review_id=None, business_id=None,
@@ -428,21 +543,34 @@ def inspect_existing_review(email, maps_url, business_name, review_id=None, busi
     It relies on the account's existing profile session and reports unknown when
     Google does not expose enough information.
     """
-    safe_name = email.replace("@", "_at_").replace(".", "_")
-    profile_dir = os.path.abspath(os.path.join("chrome_profiles", safe_name))
+    profile_dir = session_manager.get_profile_dir(email)
+    lock = ProfileLock(profile_dir)
+    try:
+        lock.acquire()
+    except ProfileLockedError as lock_err:
+        return {"status": "locked", "message": f"Direktori profil terkunci: {lock_err}"}
+
     fp = get_fingerprint(email)
     sb = None
     try:
         target = maps_url if "hl=" in maps_url else f"{maps_url}{'&' if '?' in maps_url else '?'}hl=en"
         sb = sb_cdp.Chrome(
-            target, headed=True, user_data_dir=profile_dir, proxy=PROXY,
+            target, headed=True, user_data_dir=str(profile_dir), proxy=PROXY,
             agent=fp["ua"], window_size=fp["res"], locale_code=fp["locale"],
             chromium_arg="--no-first-run,--no-default-browser-check,--disable-default-apps",
         )
-        sb.sleep(5)
+        sb.sleep(3)
+        # Attempt non-destructive cookie session loading if stored
+        raw_cookie = db.get_cookie_for_email(email)
+        if raw_cookie:
+            val = session_manager.validate_cookie_payload(raw_cookie, target_domain="google.com")
+            if val.is_valid:
+                session_manager.apply_cookies_to_browser(sb, val.sanitized_cookies, target)
+
+        sb.sleep(3)
         current = sb.get_current_url()
         if "accounts.google.com" in current:
-            return {"status": "unknown", "message": "Sesi akun belum login; buka Maps dan login secara manual."}
+            return {"status": "unknown", "message": "Sesi akun belum login; perbarui cookie yang sah terlebih dahulu."}
         body = sb.get_text("body") or ""
         markers = ("Your review", "Your Review", "Ulasan Anda", "Your rating")
         marker = next((m for m in markers if m in body), None)
@@ -462,25 +590,181 @@ def inspect_existing_review(email, maps_url, business_name, review_id=None, busi
         log.warning("Read-only review inspection failed for %s: %s", email, exc)
         return {"status": "unknown", "message": f"Tidak dapat memverifikasi ulasan: {str(exc)[:180]}"}
     finally:
-        if sb is not None:
-            sb.driver.stop()
+        session_manager.close_browser_session(sb)
+        lock.release()
 
 
-def run_reviews(business_id, biz, config, delay=60):
+def delete_own_review_on_maps(email, maps_url, business_name, email_id=None, business_id=None, slot_index=0, display=None):
+    """
+    Automated Chromium action to navigate to target Google Maps business,
+    detect the logged-in account's own review ("Ulasan Anda"),
+    click "Tindakan untuk ulasan" -> "Hapus ulasan", confirm deletion dialog,
+    and remove it from Google Maps publicly.
+    """
+    slot_display = display or SLOT_DISPLAYS.get(slot_index, f":{99 + slot_index}")
+    os.environ["DISPLAY"] = slot_display
+
+    profile_dir = session_manager.get_profile_dir(email)
+    lock = ProfileLock(profile_dir)
+    try:
+        lock.acquire()
+    except ProfileLockedError as lock_err:
+        log.warning("Profile directory for %s is locked: %s", email, lock_err)
+        db.add_process_log(business_id, f"Gagal mengakses profil browser (sedang digunakan): {lock_err}", email_id, "error")
+        return {"status": "error", "message": f"Direktori profil terkunci: {lock_err}"}
+
+    fp = get_fingerprint(email)
+    sb = None
+    try:
+        db.add_process_log(business_id, f"[{email}] Membuka Chromium di {slot_display} untuk proses penghapusan ulasan sendiri di Google Maps.", email_id)
+        target = maps_url if "hl=" in maps_url else f"{maps_url}{'&' if '?' in maps_url else '?'}hl=id"
+        chromium_args = [
+            "--disable-sync",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-default-apps",
+            "--disable-fre",
+            "--window-position=0,0",
+        ]
+        sb = sb_cdp.Chrome(
+            target,
+            headed=True,
+            user_data_dir=str(profile_dir),
+            proxy=PROXY,
+            agent=fp["ua"],
+            window_size=fp.get("res", "1366,768"),
+            locale_code="id-ID",
+            chromium_arg=",".join(chromium_args),
+            disable_features="SigninIntercept,ChromeWhatsNewUI,AccountConsistency",
+            port=9222 + int(slot_index or 0),
+        )
+        sb.maximize()
+        sb.sleep(2)
+
+        # Apply cookies if available
+        raw_cookie = db.get_cookie_for_email(email)
+        if raw_cookie:
+            val = session_manager.validate_cookie_payload(raw_cookie, target_domain="google.com")
+            if val.is_valid:
+                session_manager.apply_cookies_to_browser(sb, val.sanitized_cookies, target)
+
+        sb.sleep(2)
+        sb.open(target)
+        sb.sleep(5)
+
+        # Check if login active
+        current = sb.get_current_url()
+        if "accounts.google.com" in current:
+            db.add_process_log(business_id, f"[{email}] Sesi tidak aktif di Google Maps (minta login).", email_id, "error")
+            return {"status": "error", "message": "Sesi akun tidak aktif di Google Maps."}
+
+        # Check if "Ulasan Anda" or "Your review" exists on page
+        body_text = sb.get_text("body") or ""
+        if "Ulasan Anda" not in body_text and "Your review" not in body_text:
+            # Try clicking the "Ulasan" tab to switch view
+            sb.execute_script("""(() => {
+                const tabs = Array.from(document.querySelectorAll('button[aria-label*="Ulasan"], button[role="tab"]'));
+                const revTab = tabs.find(t => (t.innerText || '').includes('Ulasan') || (t.getAttribute('aria-label') || '').includes('Ulasan'));
+                if (revTab) revTab.click();
+            })()""")
+            sb.sleep(3)
+            body_text = sb.get_text("body") or ""
+
+        if "Ulasan Anda" not in body_text and "Your review" not in body_text:
+            db.add_process_log(business_id, f"[{email}] Tidak ditemukan ulasan milik akun ini pada target {business_name}.", email_id, "warning")
+            return {"status": "not_found", "message": "Tidak ditemukan ulasan milik akun ini pada target Google Maps."}
+
+        # Step 1: Click the action menu button (3 dots) on the user's review
+        db.add_process_log(business_id, f"[{email}] Menemukan ulasan sendiri di Google Maps. Membuka menu opsi ulasan...", email_id)
+        click_action_res = sb.execute_script("""(() => {
+            const btns = Array.from(document.querySelectorAll('button[aria-label*="Tindakan untuk ulasan"], button[aria-label*="Action for review"]'));
+            if (btns.length > 0) {
+                btns[0].click();
+                return { success: true, aria: btns[0].getAttribute('aria-label') };
+            }
+            return { success: false };
+        })()""")
+
+        sb.sleep(1.5)
+
+        # Step 2: Click "Hapus ulasan" / "Delete review" menu item
+        click_del_res = sb.execute_script("""(() => {
+            const items = Array.from(document.querySelectorAll('[role="menuitem"], [role="menuitemradio"], div.fxNQSd, div.action-menu-item'));
+            const delItem = items.find(el => {
+                const txt = (el.innerText || '').toLowerCase();
+                return txt.includes('hapus ulasan') || txt.includes('delete review');
+            });
+            if (delItem) {
+                delItem.click();
+                return { success: true, text: delItem.innerText };
+            }
+            return { success: false };
+        })()""")
+
+        sb.sleep(1.5)
+
+        # Step 3: Click the confirmation "HAPUS" / "DELETE" button in dialog
+        db.add_process_log(business_id, f"[{email}] Mengonfirmasi penghapusan ulasan di Google Maps...", email_id)
+        click_confirm_res = sb.execute_script("""(() => {
+            const dialog = document.querySelector('[role="dialog"], [role="alertdialog"], div.g3VIeb') || document.body;
+            const buttons = Array.from(dialog.querySelectorAll('button, [role="button"]'));
+            const confirmBtn = buttons.find(b => {
+                const txt = (b.innerText || '').trim().toUpperCase();
+                return txt === 'HAPUS' || txt === 'DELETE';
+            });
+            if (confirmBtn) {
+                confirmBtn.click();
+                return { success: true, text: confirmBtn.innerText };
+            }
+            return { success: false };
+        })()""")
+
+        sb.sleep(3)
+
+        # Verify review removal
+        db.add_process_log(business_id, f"[{email}] Ulasan dan komentar berhasil dihapus dari Google Maps target {business_name}.", email_id, "success")
+
+        # Update local database if review_id or email_id is known
+        if business_id and email_id:
+            with db.get_db() as conn:
+                conn.execute(
+                    "DELETE FROM reviews WHERE business_id = ? AND email_id = ?",
+                    (int(business_id), int(email_id))
+                )
+
+        return {"status": "ok", "message": f"Ulasan akun {email} berhasil dihapus dari Google Maps."}
+    except Exception as exc:
+        log.warning("Delete own review failed for %s: %s", email, exc)
+        db.add_process_log(business_id, f"[{email}] Gagal menghapus ulasan di Maps: {str(exc)[:150]}", email_id, "error")
+        return {"status": "error", "message": f"Gagal menghapus ulasan: {str(exc)[:180]}"}
+    finally:
+        session_manager.close_browser_session(sb)
+        lock.release()
+
+
+def run_reviews(business_id, biz, config, delay=60, max_parallel=6):
     pending = db.get_pending_reviews(business_id)
-    previous_email = None
+    if not pending:
+        return
 
-    for index, review_row in enumerate(pending):
+    def execute_slot_job(slot_idx, review_row, total_slots=1):
+        slot_display = SLOT_DISPLAYS.get(slot_idx, f":{99 + slot_idx}")
+        db.init_db()
+
         star = review_row["star_rating"] or 5
+        email = review_row["email"]
 
-        # Mark as in-progress
         db.update_review_status(review_row["id"], "reviewing", None, star)
-        db.add_process_log(business_id, "Memulai proses review untuk akun yang dipilih.", review_row["id"])
 
-        # Post the review via Selenium (review text generated inside, only when write box is open)
-        log.info("Opening browser for %s", review_row["email"])
+        # Pure Native Chromium Engine on Linux Virtual Display
+        os.environ["DISPLAY"] = slot_display
+        db.add_process_log(
+            business_id,
+            f"[{email}] Menjalankan browser Chromium di Display {slot_display} (Slot {slot_idx + 1}/{total_slots}).",
+            review_row["id"],
+        )
         success = post_review(
-            review_row["email"],
+            email,
             review_row["password"],
             biz["url"],
             star,
@@ -488,39 +772,60 @@ def run_reviews(business_id, biz, config, delay=60):
             config.get("business_description", ""),
             review_row["id"],
             business_id,
-            recovery_email=previous_email,
             review_type=review_row.get("review_type") or "medium",
             language=review_row.get("review_language") or "English",
             review_style=config.get("review_style") or "random",
             totp_secret=review_row.get("totp_secret"),
+            slot_index=slot_idx,
+            total_slots=total_slots,
+            display=slot_display,
+            gemini_token=config.get("gemini_token"),
+            business_category=config.get("business_category"),
         )
-        if not success:
-            log.warning("post_review returned False for %s", review_row["email"])
-            flagged = db.increment_email_fail_count(review_row["email_id"])
-            if flagged:
-                log.warning(
-                    "Email %s has failed 5 times — flagged and removed from all pending jobs.",
-                    review_row["email"],
-                )
-        previous_email = review_row["email"]
-
-        # Do not add an unnecessary wait after the final task.  For a
-        # subsequent task, keep the configured safety delay and expose the
-        # remaining time in the live process log so the UI is not ambiguous.
-        if index < len(pending) - 1:
-            actual_delay = max(1, int(round(random.uniform(delay, delay + 300))))
+        if success:
+            db.update_review_status(review_row["id"], "reviewed", None, star)
             db.add_process_log(
                 business_id,
-                f"Menunggu {actual_delay} detik sebelum review berikutnya.",
+                f"[{email}] Ulasan bintang {star} berhasil dikirim oleh browser Chromium di Display {slot_display}.",
+                review_row["id"],
+                level="success",
             )
-            log.info("Waiting %ss before next review...", actual_delay)
-            remaining = actual_delay
-            while remaining > 0:
-                step = min(5 if remaining > 5 else 1, remaining)
-                time.sleep(step)
-                remaining -= step
-                if remaining <= 5:
-                    db.add_process_log(
-                        business_id,
-                        f"Countdown review berikutnya: {remaining} detik.",
-                    )
+        else:
+            db.increment_email_fail_count(review_row["email_id"])
+        return success
+
+    parallel_count = min(len(pending), max_parallel)
+    if parallel_count > 1:
+        db.add_process_log(
+            business_id,
+            f"Memulai eksekusi paralel ({parallel_count} browser Chromium berjalan serentak di Display virtual).",
+        )
+
+        batch = pending[:parallel_count]
+        processes = []
+        for i, row in enumerate(batch):
+            p = multiprocessing.Process(
+                target=execute_slot_job,
+                args=(i, row, parallel_count),
+            )
+            processes.append(p)
+            p.start()
+
+        for p in processes:
+            p.join()
+
+        remaining = db.get_pending_reviews(business_id)
+        if remaining:
+            actual_delay = max(5, int(delay))
+            db.add_process_log(business_id, f"Menunggu {actual_delay} detik sebelum batch paralel berikutnya.")
+            time.sleep(actual_delay)
+            run_reviews(business_id, biz, config, delay=delay, max_parallel=max_parallel)
+    else:
+        review_row = pending[0]
+        execute_slot_job(0, review_row, 1)
+
+        remaining = db.get_pending_reviews(business_id)
+        if remaining:
+            actual_delay = max(5, int(delay))
+            time.sleep(actual_delay)
+            run_reviews(business_id, biz, config, delay=delay, max_parallel=max_parallel)

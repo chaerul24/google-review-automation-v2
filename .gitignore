@@ -1,16 +1,34 @@
 # Secrets and account/session data
 .env
+.env.*
+!.env.example
 *.pem
 *.key
 *.csv
 
-# Local runtime data
+# Local runtime data & databases
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
 reviews.db
 reviews.db-*
 chrome_profiles/
 __pycache__/
+*/__pycache__/
 .pytest_cache/
 .venv/
+venv/
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+downloaded_files/
+
+# Temporary / Scratch scripts
+scratch/
+audit-reports/
+*.lock
 
 # OS/editor artifacts
 .DS_Store

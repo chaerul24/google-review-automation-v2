@@ -1,29 +1,40 @@
-# Google Review Automation 🤖⭐
+# Google Review Automation v2 🤖⭐
 
-An automated Google Maps review bot that uses local review templates and **undetected browser automation** (SeleniumBase) to post reviews from multiple Google accounts to any Google Maps business listing — managed through a simple Flask web dashboard.
+An automated Google Maps review bot and automation suite built with **Native Linux Chromium**, **CDP Cookie Injection**, and **Zero-VM Architecture**. Posts reviews from multiple authenticated Google accounts to any Google Maps business listing — controllable via Web Dashboard, Server TUI CLI, or remote Windows CMD client.
+
+---
+
+## What's New in v2
+
+- **Zero-VM Architecture** — Completely replaced heavy Windows VMs with lightweight native Linux Chromium running on virtual Xvfb displays (`:99` to `:104`).
+- **Windows CMD CLI Client (`bot_cli.py` & `bot.bat`)** — Control review automation directly from your physical Windows PC Command Prompt over local network with live log streaming.
+- **User Authentication** — Secure login prompt (`username`, `password`) before accessing task sessions and interactive menus.
+- **CDP Cookie Restoration** — Instant session restoration using Chrome DevTools Protocol (`Network.setCookies`) bypassing restrictive domain limitations.
+- **Independent Parallel CDP Ports** — Dedicated debugging ports (`9222 + slot_index`) prevent browser connection collisions during parallel execution.
+- **Interactive Server TUI (`cli.py`)** — Rich terminal user interface with live stats, account cookie status, business management, and browser diagnostic test.
 
 ---
 
 ## Features
 
-- **Local Review Templates** — Uses selectable Random, Baik, and Buruk templates without an AI API
-- **Multi-Account Support** — Manage a pool of Google accounts, each with its own persistent Chrome profile to maintain login sessions
-- **Per-Business Configuration** — Set custom star rating distributions, business descriptions, and review styles per business
-- **Background Worker** — Standalone `worker.py` polls the database and processes review jobs independently from the web app
-- **Web Dashboard** — Password-protected Flask UI to add businesses, manage email accounts, queue review jobs, and track status
-- **Proxy Support** — Route all browser traffic through a configurable proxy
+- **Local & AI Review Generation** — Supports template-based reviews (Baik, Buruk, Random) and AI-assisted generation via Google AI Gemini.
+- **Multi-Account & Cookie Pool** — Manage Google accounts with JSON cookie storage and automatic session health validation.
+- **Parallel Multi-Browser Automation** — Run up to 6 concurrent Chromium browser slots simultaneously.
+- **Web Dashboard & REST API** — Flask web dashboard with live Sharescreen preview, audit logs, and REST API endpoints.
+- **Background Worker & Drip Campaign** — Independent worker process with auto-replenishment during business hours.
 
 ---
 
 ## Tech Stack
 
 | Component | Technology |
-|-----------|-----------|
-| Web App | Flask |
-| Browser Automation | SeleniumBase (undetected Chrome) |
-| Review Text | Local templates (no AI API) |
-| Database | SQLite (WAL mode) |
-| Auth | Session-based with hashed password |
+|---|---|
+| Engine | Linux Native Chromium (Xvfb `:99..:104`) |
+| Automation | SeleniumBase / Selenium CDP (Undetected Mode) |
+| Web Backend | Flask, Werkzeug, SQLite (WAL mode) |
+| CLI Clients | Python `urllib` (Windows Zero-pip Client), Rich TUI (Server) |
+| AI Generation | Google Gemini API (Optional) |
+| Auth | Session-based & HMAC SHA-256 API Key verification |
 
 ---
 
@@ -31,115 +42,77 @@ An automated Google Maps review bot that uses local review templates and **undet
 
 ```
 .
-├── app.py          # Flask web dashboard (auth, business/email management, job queuing)
-├── bot.py          # Core automation: review generation + Selenium posting logic
-├── db.py           # SQLite database layer
-├── worker.py       # Background scheduler that processes pending review jobs
+├── app.py                  # Flask web dashboard & REST API
+├── bot.py                  # Core native Chromium review automation engine
+├── db.py                   # SQLite database layer & schema migrations
+├── worker.py               # Background scheduler & drip campaign processor
+├── session_manager.py      # CDP cookie management & session health validator
+├── cli.py                  # Rich terminal interactive dashboard (Linux Host)
+├── bot_cli.py              # Windows Command Prompt client script
+├── bot.bat                 # Windows 1-click batch launcher & auto-updater
 ├── requirements.txt
-├── chrome_profiles/  # Persistent Chrome profiles per Google account
-├── templates/
-│   ├── login.html
-│   ├── dashboard.html
-│   └── business.html
-└── .env            # Environment variables (see below)
+├── templates/              # Dashboard Jinja2 HTML templates
+└── static/                 # CSS, JavaScript & client assets
 ```
 
 ---
 
-## Setup
+## Setup & Quick Start
 
-### 1. Install dependencies
+### 1. Host Server Installation (Linux)
 
 ```bash
+git clone https://github.com/chaerul24/google-review-automation-v2.git
+cd google-review-automation-v2
+
+# Create virtual environment & install requirements
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your SECRET_KEY and APP_PASSWORD
 ```
 
-### 2. Configure environment
-
-Create a `.env` file in the project root:
-
-```env
-SECRET_KEY=your_flask_secret_key
-APP_PASSWORD=your_dashboard_password
-PROXY=http://user:pass@host:port   # optional
-```
-
-### 3. Initialize the database
-
-The database is auto-initialized on first run.
-
-### 4. Run the web app
+### 2. Start Services
 
 ```bash
+# Start Web Dashboard
 python app.py
-```
 
-Access the dashboard at `http://localhost:5000`.
-
-### 5. Run the background worker
-
-In a separate terminal:
-
-```bash
+# Start Background Worker
 python worker.py
-```
 
-The worker polls the database every 60 seconds and processes pending review jobs.
+# Or launch Server CLI
+python cli.py
+```
 
 ---
 
-## How It Works
+## Windows Client Usage
 
-### Safe parallel Chromium dry-run
+Run review tasks directly from any physical Windows PC on the local network:
 
-The project includes `dry_run_workers.py` for testing multiple isolated Chromium
-instances without logging in or submitting public reviews. The worker limit is
-configurable and each worker reports `Starting`, `Running`, `Completed`,
-`Failed`, or `Stopped`, including runtime and active-worker count, before
-cleaning its temporary profile.
-
-```bash
-DISPLAY=:99 .venv/bin/python dry_run_workers.py --workers 3 --duration 5 --delay 10 about:blank about:blank about:blank
-```
-
-Dry-run task waves start immediately by default. An optional fixed delay can be
-enabled with `--delay`; when enabled, the worker emits a real countdown. This
-setting does not change the production review path.
-
-The production review path remains sequential and is intentionally not
-parallelized for public posting.
-
-### Browser automation storage
-
-The systemd service stores dry-run temporary profiles, caches, downloads, logs,
-and benchmark artifacts on `/mnt/hdd-500gb/browser-storage`. The service sets
-`BROWSER_AUTOMATION_STORAGE`, `TMPDIR`, `TEMP`, and `TMP` accordingly. Login
-profiles under `chrome_profiles/` and the project database are intentionally
-not moved. If the HDD path is unavailable, dry-run exits with an explicit
-storage error instead of silently filling the root filesystem.
-
-1. **Add a business** — Paste a Google Maps URL and configure star rating distribution and business description via the dashboard.
-2. **Add email accounts** — Add Google account credentials to the shared email pool.
-3. **Queue reviews** — Assign emails to a business to create pending review jobs.
-4. **Worker picks up jobs** — The background worker selects a local review template for each job and posts it via an undetected Chrome browser logged into the corresponding Google account.
-5. **Status tracking** — Each job transitions through `pending → reviewing → reviewed` (or back to `pending` on failure).
-
----
-
-## Requirements
-
-- Python 3.10+
-- Google Chrome installed
-- Google accounts with access to post reviews
+1. Download the launcher from your browser or Command Prompt:
+   ```cmd
+   curl -O http://<SERVER_IP>:5000/download/bot.bat
+   ```
+2. Double click `bot.bat` or run:
+   ```cmd
+   bot.bat
+   ```
+3. Enter your server **Username** and **Password**.
+4. Select menu `[1] 🚀 Jalankan Task` and watch the live streaming review logs!
 
 ---
 
 ## Tags
 
-`google-maps` `review-automation` `selenium` `seleniumbase` `flask` `python` `bot` `web-scraping` `chrome-automation` `undetected-chromedriver` `sqlite` `review-bot`
+`google-maps` `review-automation` `selenium` `seleniumbase` `flask` `python` `bot` `cdp` `chromium` `xvfb` `sqlite`
 
 ---
 
 ## Disclaimer
 
-This project is for **educational purposes only**. Automating Google reviews may violate [Google's Terms of Service](https://policies.google.com/terms). Use responsibly.
+This project is for **educational and testing purposes only**. Automating Google reviews may violate [Google's Terms of Service](https://policies.google.com/terms). Use responsibly.

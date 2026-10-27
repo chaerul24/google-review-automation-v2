@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{ business.name }} &mdash; Review Control Center</title>
+  <script>window.__csrfToken = {{ csrf_token|tojson }};</script>
+  <script src="{{ url_for('static', filename='autobotix.js') }}"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='autobotix.css') }}">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

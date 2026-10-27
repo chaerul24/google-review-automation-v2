@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% block title %}ReviewStudio &mdash; SaaS Dashboard{% endblock %}</title>
+  <script>window.__csrfToken = {{ csrf_token|tojson }};</script>
+  <script src="{{ url_for('static', filename='autobotix.js') }}"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='autobotix.css') }}">
 
   <!-- Google Font: Inter -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -126,6 +129,11 @@
           <svg class="w-4 h-4 text-accent shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
           <span class="sidebar-text truncate">Dashboard</span>
         </a>
+        <a href="{{ url_for('autobotix_overview') }}" class="nav-item flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold transition-ui {% if active_page == 'overview' %}bg-card text-txt-primary border border-border{% else %}text-txt-secondary hover:text-txt-primary hover:bg-card/50{% endif %}"><span class="sidebar-text truncate">Infrastructure Overview</span></a>
+        <a href="{{ url_for('tunnels') }}" class="nav-item flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold transition-ui {% if active_page == 'tunnels' %}bg-card text-txt-primary border border-border{% else %}text-txt-secondary hover:text-txt-primary hover:bg-card/50{% endif %}"><span class="sidebar-text truncate">Tunnel Manager</span></a>
+        <a href="{{ url_for('domains') }}" class="nav-item flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold transition-ui {% if active_page == 'domains' %}bg-card text-txt-primary border border-border{% else %}text-txt-secondary hover:text-txt-primary hover:bg-card/50{% endif %}"><span class="sidebar-text truncate">Domain Intelligence</span></a>
+        <a href="{{ url_for('monitoring') }}" class="nav-item flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold transition-ui {% if active_page == 'monitoring' %}bg-card text-txt-primary border border-border{% else %}text-txt-secondary hover:text-txt-primary hover:bg-card/50{% endif %}"><span class="sidebar-text truncate">Monitoring</span></a>
+        <a href="{{ url_for('autobotix_activity') }}" class="nav-item flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold transition-ui {% if active_page == 'activity' %}bg-card text-txt-primary border border-border{% else %}text-txt-secondary hover:text-txt-primary hover:bg-card/50{% endif %}"><span class="sidebar-text truncate">Activity Logs</span></a>
 
         <a href="/dashboard#businesses-section"
            class="nav-item flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold transition-ui text-txt-secondary hover:text-txt-primary hover:bg-card/50">
@@ -243,6 +251,9 @@
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
           <span class="hidden sm:inline">Refresh</span>
         </button>
+        <div class="hidden sm:flex rounded-xl overflow-hidden border border-border" aria-label="Theme">
+          <button data-theme-choice="light" class="px-2 py-1 text-xs text-txt-secondary">Light</button><button data-theme-choice="dark" class="px-2 py-1 text-xs text-txt-secondary">Dark</button><button data-theme-choice="system" class="px-2 py-1 text-xs text-txt-secondary">System</button>
+        </div>
         {% endblock %}
       </div>
     </header>
