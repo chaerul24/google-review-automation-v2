@@ -52,10 +52,12 @@ DEFAULT_API_KEY = os.environ.get("BOT_KEY", "")
 class ServerClient:
     """REST API Client communicating with AutoBotix server."""
 
-    def __init__(self, base_url: str = DEFAULT_SERVER, api_key: str = DEFAULT_API_KEY, username: str = ""):
+    def __init__(self, base_url: str = DEFAULT_SERVER, api_key: str = DEFAULT_API_KEY, username: str = "", role: str = ""):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.username = username
+        self.role = role or ("administrator" if username.lower() == "admin" else "user")
+        self.is_admin = (self.role == "administrator" or self.username.lower() in ("admin",))
 
     def login(self, username: str, password: str) -> Dict[str, Any]:
         """Authenticate against the server and retrieve session API key."""
@@ -77,6 +79,8 @@ class ServerClient:
                 if data.get("authenticated"):
                     self.api_key = data.get("api_key") or password
                     self.username = data.get("username", username)
+                    self.role = data.get("role", "administrator" if self.username.lower() == "admin" else "user")
+                    self.is_admin = (self.role == "administrator" or self.username.lower() in ("admin",))
                     return data
                 raise RuntimeError(data.get("message", "Username atau password salah."))
         except urllib.error.HTTPError as err:
@@ -129,6 +133,10 @@ class ServerClient:
         }
         if self.api_key:
             headers["X-API-Key"] = self.api_key
+        if self.username:
+            headers["X-Username"] = self.username
+        if self.role:
+            headers["X-User-Role"] = self.role
 
         body_bytes = None
         if data is not None:
@@ -153,6 +161,28 @@ class ServerClient:
             raise RuntimeError(msg)
         except urllib.error.URLError as err:
             raise ConnectionError(f"Gagal terhubung ke server di {self.base_url}: {err.reason}")
+
+    def add_cookie(self, cookie_json: str, email: str = "") -> Dict[str, Any]:
+        """Add a new cookie session to the database (Admin only)."""
+        payload = {
+            "cookie_json": cookie_json,
+            "cookie_email": email,
+            "email": email,
+        }
+        return self._request("/api/cookies", method="POST", data=payload)
+
+    def delete_cookie(self, cookie_id: Optional[int] = None, email: str = "") -> Dict[str, Any]:
+        """Delete a cookie session by ID or email (Admin only)."""
+        payload = {}
+        if cookie_id is not None:
+            payload["cookie_id"] = cookie_id
+        if email:
+            payload["email"] = email
+        return self._request("/api/cli/cookies/delete", method="POST", data=payload)
+
+    def test_cookie(self, cookie_id: int) -> Dict[str, Any]:
+        """Test a cookie session validity against Google."""
+        return self._request(f"/api/cookies/{cookie_id}/test", method="POST")
 
     def get_status(self) -> Dict[str, Any]:
         return self._request("/api/cli/status")
@@ -575,6 +605,179 @@ def print_accounts(accounts: List[Dict[str, Any]]):
     print()
 
 
+def print_cookies_table(cookies: List[Dict[str, Any]]):
+    print()
+    box_header(f"{C_BOLD}{C_CYAN}STATUS SESI & DAFTAR COOKIE GOOGLE{C_RESET}")
+    if not cookies:
+        print(f"  {C_YELLOW}Belum ada cookie Google terdaftar di database.{C_RESET}")
+        return
+
+    print(f" {C_BOLD}{'ID':<6} {'AKUN EMAIL GOOGLE':<34} {'STATUS SESI':<20} {'PEMBARUAN TERAKHIR'}{C_RESET}")
+    print(" " + "─" * 78)
+    for c in cookies:
+        cid = c.get("id")
+        email = c.get("email", "")[:32]
+        c_status = (c.get("status") or "unknown").lower()
+        upd = c.get("updated_at") or c.get("last_checked_at") or "-"
+        if len(str(upd)) > 19:
+            upd = str(upd)[:19]
+
+        if c_status == "active":
+            st_color = f"{C_GREEN}● AKTIF{C_RESET}"
+        elif c_status in ("expired", "revoked", "invalid"):
+            st_color = f"{C_RED}✖ KEDALUWARSA{C_RESET}"
+        elif c_status == "needs_login":
+            st_color = f"{C_YELLOW}▲ PERLU LOGIN{C_RESET}"
+        else:
+            st_color = f"{C_DIM}- TIDAK AKTIF -{C_RESET}"
+
+        st_pad = pad_to_display_width(st_color, 18)
+        print(f" {C_YELLOW}{cid:<6}{C_RESET} {C_WHITE}{email:<34}{C_RESET} {st_pad} {C_DIM}{upd}{C_RESET}")
+    print()
+
+
+def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
+    """Display cookies and provide Admin Add/Remove capabilities."""
+    cookies = status_info.get("cookies", [])
+    if not cookies:
+        try:
+            cur_status = client.get_status()
+            cookies = cur_status.get("cookies", [])
+        except Exception:
+            pass
+
+    while True:
+        print_cookies_table(cookies)
+
+        if not client.is_admin:
+            print(f" {C_DIM}ℹ️  Anda masuk sebagai akun biasa ({client.username}). Fitur tambah & hapus cookie hanya untuk Administrator.{C_RESET}")
+            input(f"\n {C_DIM}Tekan Enter untuk kembali ke menu utama...{C_RESET}")
+            break
+
+        # Admin Actions Menu
+        print(f" {C_BOLD}{C_CYAN}─── KELOLA COOKIE (AKUN ADMIN) ────────────────────────────────────────{C_RESET}")
+        print(f"  {C_YELLOW}[1]{C_RESET} {C_WHITE}➕ Tambah Cookie Baru (Paste JSON atau File .json){C_RESET}")
+        print(f"  {C_YELLOW}[2]{C_RESET} {C_WHITE}🗑️  Hapus Cookie (Berdasarkan ID atau Email){C_RESET}")
+        print(f"  {C_YELLOW}[3]{C_RESET} {C_WHITE}🔄 Uji Validitas Cookie (Test Sesi Google){C_RESET}")
+        print(f"  {C_YELLOW}[0]{C_RESET} {C_DIM}↩️  Kembali ke Menu Utama{C_RESET}")
+        print()
+
+        try:
+            c_opt = input(f" {C_GREEN}Pilih aksi cookie [0-3] (default 0): {C_RESET}").strip() or "0"
+        except (KeyboardInterrupt, EOFError):
+            break
+
+        if c_opt == "0":
+            break
+
+        elif c_opt == "1":
+            print(f"\n {C_BOLD}{C_CYAN}─── TAMBAH COOKIE BARU ───────────────────────────────────────────────{C_RESET}")
+            print(f" {C_DIM}Tips: Anda dapat memasukkan file path (.json) atau paste JSON cookie langsung.{C_RESET}")
+            source_in = input(f" {C_GREEN}Jalur File .json (kosongkan jika ingin paste langsung): {C_RESET}").strip()
+
+            raw_cookie = ""
+            if source_in:
+                file_path = os.path.expanduser(source_in.strip('\'"'))
+                if not os.path.exists(file_path):
+                    print(f" {C_RED}✖ File tidak ditemukan: {file_path}{C_RESET}")
+                    time.sleep(1.5)
+                    continue
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        raw_cookie = f.read().strip()
+                except Exception as e:
+                    print(f" {C_RED}✖ Gagal membaca file: {e}{C_RESET}")
+                    time.sleep(1.5)
+                    continue
+            else:
+                print(f" {C_YELLOW}Paste JSON cookie Anda di bawah ini, lalu tekan Enter:{C_RESET}")
+                try:
+                    raw_cookie = input(f" JSON: ").strip()
+                except (KeyboardInterrupt, EOFError):
+                    print(f"\n {C_YELLOW}Batal.{C_RESET}")
+                    continue
+
+            if not raw_cookie:
+                print(f" {C_RED}✖ Cookie tidak boleh kosong.{C_RESET}")
+                time.sleep(1)
+                continue
+
+            email_in = input(f" {C_GREEN}Email Google (kosongkan untuk deteksi otomatis dari cookie): {C_RESET}").strip()
+
+            spin = Spinner("Memvalidasi dan menyimpan cookie ke server...")
+            spin.start()
+            try:
+                res = client.add_cookie(raw_cookie, email=email_in)
+                detected = res.get("email") or email_in
+                st_val = res.get("session_status", "unknown")
+                c_cnt = res.get("cookie_count", 0)
+                spin.stop(f" {C_BOLD}{C_GREEN}✓ Cookie berhasil disimpan untuk akun '{detected}'!{C_RESET}")
+                print(f"   {C_DIM}Status Sesi: {C_GREEN if st_val == 'active' else C_YELLOW}{st_val.upper()}{C_RESET} │ {C_DIM}Jumlah Cookie: {C_WHITE}{c_cnt}{C_RESET}")
+                if res.get("warning"):
+                    print(f"   {C_YELLOW}⚠️  {res.get('warning')}{C_RESET}")
+                time.sleep(1.5)
+                try:
+                    status_info = client.get_status()
+                    cookies = status_info.get("cookies", [])
+                except Exception:
+                    pass
+            except Exception as e:
+                spin.stop()
+                print(f" {C_BOLD}{C_RED}✖ Gagal menambahkan cookie: {e}{C_RESET}")
+                time.sleep(2)
+
+        elif c_opt == "2":
+            print(f"\n {C_BOLD}{C_CYAN}─── HAPUS COOKIE ──────────────────────────────────────────────────────{C_RESET}")
+            del_in = input(f" {C_GREEN}Masukkan ID Cookie (angka) ATAU Email yang ingin dihapus: {C_RESET}").strip()
+            if not del_in:
+                print(f" {C_YELLOW}Batal menghapus cookie.{C_RESET}")
+                continue
+
+            confirm = input(f" {C_BOLD}{C_RED}Yakin ingin menghapus cookie '{del_in}'? [y/N]: {C_RESET}").strip().lower()
+            if confirm in ("y", "yes"):
+                spin = Spinner(f"Menghapus cookie '{del_in}' dari server...")
+                spin.start()
+                try:
+                    if del_in.isdigit():
+                        res = client.delete_cookie(cookie_id=int(del_in))
+                    else:
+                        res = client.delete_cookie(email=del_in)
+                    spin.stop(f" {C_BOLD}{C_GREEN}✓ {res.get('message', 'Cookie berhasil dihapus.')}{C_RESET}")
+                    time.sleep(1.5)
+                    try:
+                        status_info = client.get_status()
+                        cookies = status_info.get("cookies", [])
+                    except Exception:
+                        pass
+                except Exception as e:
+                    spin.stop()
+                    print(f" {C_BOLD}{C_RED}✖ Gagal menghapus cookie: {e}{C_RESET}")
+                    time.sleep(2)
+
+        elif c_opt == "3":
+            print(f"\n {C_BOLD}{C_CYAN}─── UJI VALIDITAS COOKIE ──────────────────────────────────────────────{C_RESET}")
+            test_in = input(f" {C_GREEN}Masukkan ID Cookie yang ingin diuji: {C_RESET}").strip()
+            if not test_in.isdigit():
+                print(f" {C_RED}✖ ID harus berupa angka.{C_RESET}")
+                time.sleep(1)
+                continue
+
+            cid = int(test_in)
+            spin = Spinner(f"Menguji validitas sesi Google untuk Cookie ID {cid}...")
+            spin.start()
+            try:
+                res = client.test_cookie(cid)
+                st_val = res.get("session_status", "unknown")
+                is_valid = res.get("is_valid", False)
+                email_target = res.get("email", str(cid))
+                spin.stop(f" {C_BOLD}{C_GREEN if is_valid else C_YELLOW}✓ Akun '{email_target}': Status = {st_val.upper()} (Valid = {is_valid}){C_RESET}")
+                time.sleep(2)
+            except Exception as e:
+                spin.stop()
+                print(f" {C_BOLD}{C_RED}✖ Gagal menguji cookie: {e}{C_RESET}")
+                time.sleep(2)
+
+
 # ── Task Execution & Live Log Monitor ─────────────────────────────────────────
 
 def run_task_stream(client: ServerClient, business_id: int, count: int = 1, star_rating: int = 5):
@@ -701,11 +904,17 @@ def interactive_menu(client: ServerClient):
         os.system("cls" if os.name == "nt" else "clear")
         print_banner(client, status_info)
 
+        cookie_menu_label = (
+            f" {C_YELLOW}[4]{C_RESET} {C_WHITE}🍪  KELOLA COOKIE (ADMIN){C_RESET}   {C_DIM}Status, Tambah & Hapus Cookie Sesi{C_RESET}"
+            if client.is_admin else
+            f" {C_YELLOW}[4]{C_RESET} {C_WHITE}🍪  STATUS COOKIE{C_RESET}        {C_DIM}Cek validitas akun Google & sesi CDP{C_RESET}"
+        )
+
         menu_lines = [
             f" {C_YELLOW}[1]{C_RESET} {C_WHITE}🚀  JALANKAN TASK{C_RESET}        {C_DIM}Mulai ulasan multi-browser otomatis{C_RESET}",
             f" {C_YELLOW}[2]{C_RESET} {C_WHITE}🏢  TARGET GOOGLE MAPS{C_RESET}   {C_DIM}Lihat daftar target & jumlah review{C_RESET}",
             f" {C_YELLOW}[3]{C_RESET} {C_WHITE}➕  TAMBAH BISNIS BARU{C_RESET}   {C_DIM}Daftarkan URL Google Maps baru{C_RESET}",
-            f" {C_YELLOW}[4]{C_RESET} {C_WHITE}🍪  STATUS COOKIE{C_RESET}        {C_DIM}Cek validitas akun Google & sesi CDP{C_RESET}",
+            cookie_menu_label,
             f" {C_YELLOW}[5]{C_RESET} {C_WHITE}📊  PANTAU LIVE LOGS{C_RESET}     {C_DIM}Lihat log proses aktivitas server{C_RESET}",
             f" {C_YELLOW}[6]{C_RESET} {C_WHITE}🛑  EMERGENCY STOP{C_RESET}       {C_DIM}Hentikan semua worker & browser{C_RESET}",
             f" {C_YELLOW}[7]{C_RESET} {C_WHITE}🔄  RESET ANTREAN{C_RESET}        {C_DIM}Bersihkan antrean ulasan & log bisnis{C_RESET}",
@@ -776,8 +985,7 @@ def interactive_menu(client: ServerClient):
             input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
 
         elif choice == "4":
-            print_accounts(status_info.get("accounts", []))
-            input(f" {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+            handle_cookie_menu(client, status_info)
 
         elif choice == "5":
             businesses = status_info.get("businesses", [])
@@ -856,6 +1064,20 @@ def main():
     # Command: accounts
     subparsers.add_parser("accounts", help="Daftar akun & cookie")
 
+    # Command: cookies
+    subparsers.add_parser("cookies", help="Daftar cookie Google")
+
+    # Command: cookie-add
+    p_cadd = subparsers.add_parser("cookie-add", help="Tambah cookie sesi Google (Admin)")
+    p_cadd.add_argument("--json", help="Raw JSON string cookie")
+    p_cadd.add_argument("--file", help="Jalur file .json cookie")
+    p_cadd.add_argument("--email", default="", help="Email akun Google (opsional)")
+
+    # Command: cookie-del
+    p_cdel = subparsers.add_parser("cookie-del", help="Hapus cookie sesi Google (Admin)")
+    p_cdel.add_argument("--id", type=int, help="ID Cookie yang ingin dihapus")
+    p_cdel.add_argument("--email", default="", help="Email akun Google yang ingin dihapus")
+
     args = parser.parse_args()
     client = ServerClient(base_url=args.server, api_key=args.key or "")
 
@@ -882,6 +1104,31 @@ def main():
             print_businesses(client.get_businesses())
         elif args.command == "accounts":
             print_accounts(client.get_accounts())
+        elif args.command == "cookies":
+            st = client.get_status()
+            print_cookies_table(st.get("cookies", []))
+        elif args.command == "cookie-add":
+            if not client.is_admin:
+                print(f"{C_RED}✖ Fitur tambah cookie hanya untuk akun Administrator.{C_RESET}")
+                sys.exit(1)
+            raw = args.json or ""
+            if not raw and args.file:
+                with open(os.path.expanduser(args.file), "r", encoding="utf-8") as f:
+                    raw = f.read()
+            if not raw:
+                print(f"{C_RED}✖ Masukkan --json atau --file.{C_RESET}")
+                sys.exit(1)
+            res = client.add_cookie(raw, email=args.email)
+            print(f"{C_GREEN}✓ Cookie berhasil disimpan untuk akun '{res.get('email')}'! Status: {res.get('session_status')}{C_RESET}")
+        elif args.command == "cookie-del":
+            if not client.is_admin:
+                print(f"{C_RED}✖ Fitur hapus cookie hanya untuk akun Administrator.{C_RESET}")
+                sys.exit(1)
+            if not args.id and not args.email:
+                print(f"{C_RED}✖ Masukkan --id atau --email untuk dihapus.{C_RESET}")
+                sys.exit(1)
+            res = client.delete_cookie(cookie_id=args.id, email=args.email)
+            print(f"{C_GREEN}✓ {res.get('message', 'Cookie berhasil dihapus.')}{C_RESET}")
         elif args.command == "run":
             run_task_stream(client, args.business, count=args.slots, star_rating=args.stars)
 

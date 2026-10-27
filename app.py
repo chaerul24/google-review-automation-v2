@@ -429,6 +429,11 @@ def api_cli_status():
             LEFT JOIN cookies c ON e.email = c.email
             ORDER BY e.id ASC
         """).fetchall()
+        cookies_list = conn.execute("""
+            SELECT c.id, c.email, c.status, c.last_checked_at, c.updated_at, c.error_reason
+            FROM cookies c
+            ORDER BY c.id ASC
+        """).fetchall()
         rev_count = conn.execute("SELECT COUNT(*) FROM reviews WHERE status = 'reviewed'").fetchone()[0]
         pending_count = conn.execute("SELECT COUNT(*) FROM reviews WHERE status = 'pending'").fetchone()[0]
 
@@ -449,6 +454,45 @@ def api_cli_status():
         "pending_count": pending_count,
         "businesses": [dict(b) for b in businesses],
         "accounts": [dict(a) for a in accounts],
+        "cookies": [dict(c) for c in cookies_list],
+    })
+
+
+@app.route("/api/cli/cookies/delete", methods=["POST"])
+@login_required
+def api_cli_delete_cookie():
+    """Delete a cookie by ID or Email with admin authorization check."""
+    req_role = request.headers.get("X-User-Role", "")
+    req_user = (request.headers.get("X-Username") or "").strip()
+    expected_user = os.environ.get("APP_USERNAME", "admin").strip()
+    is_admin = (req_role == "administrator") or (req_user.lower() in ("admin", expected_user.lower())) or (session.get("role") == "administrator")
+    if not is_admin:
+        return jsonify({"status": "error", "message": "Akses ditolak. Fitur hapus cookie hanya untuk akun administrator."}), 403
+
+    data = request.get_json(silent=True) or request.form or {}
+    cookie_id = data.get("cookie_id")
+    email = (data.get("email") or "").strip()
+
+    with db.get_db() as conn:
+        row = None
+        if cookie_id:
+            row = conn.execute("SELECT id, email FROM cookies WHERE id = ?", (cookie_id,)).fetchone()
+        elif email:
+            row = conn.execute("SELECT id, email FROM cookies WHERE email = ?", (email,)).fetchone()
+
+        if not row:
+            return jsonify({"status": "error", "message": "Cookie tidak ditemukan."}), 404
+
+        cid = row["id"]
+        c_email = row["email"]
+        db.delete_cookie(cid)
+
+    _audit(req_user or "admin", "delete_cookie", c_email, "success")
+    return jsonify({
+        "status": "ok",
+        "message": f"Cookie untuk akun '{c_email}' (ID {cid}) berhasil dihapus.",
+        "cookie_id": cid,
+        "email": c_email
     })
 
 
@@ -2112,6 +2156,12 @@ def add_cookie():
 @app.route("/api/cookies", methods=["POST"])
 @login_required
 def api_add_cookie():
+    req_role = request.headers.get("X-User-Role", "")
+    req_user = (request.headers.get("X-Username") or "").strip()
+    expected_user = os.environ.get("APP_USERNAME", "admin").strip()
+    if req_role and req_role != "administrator" and req_user.lower() not in ("admin", expected_user.lower()):
+        return jsonify({"status": "error", "message": "Akses ditolak. Fitur tambah cookie hanya untuk akun administrator."}), 403
+
     data = request.get_json(silent=True) or request.form
     cookie_raw = (data.get("cookie_json") or "").strip()
     if not cookie_raw:
