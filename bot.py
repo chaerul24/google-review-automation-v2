@@ -2,6 +2,7 @@ import hashlib
 import logging
 import os
 import random
+import subprocess
 import time
 import traceback
 import concurrent.futures
@@ -34,6 +35,37 @@ SLOT_DISPLAYS = {
     4: ":103",
     5: ":104",
 }
+
+def ensure_virtual_display(display_str: str = ":99") -> str:
+    """Ensure an X11 virtual display is available on Linux headless servers.
+    If no physical monitor or X server is running, automatically starts Xvfb.
+    """
+    if os.name == "nt":
+        return display_str
+    if not display_str:
+        display_str = ":99"
+    disp_clean = display_str if display_str.startswith(":") else f":{display_str}"
+    num_part = disp_clean.lstrip(":")
+    sock_path = f"/tmp/.X11-unix/X{num_part}"
+
+    if not os.path.exists(sock_path):
+        xvfb_bin = "/usr/bin/Xvfb"
+        if os.path.exists(xvfb_bin):
+            try:
+                log.info("Display %s tidak ditemukan. Menjalankan Xvfb virtual framebuffer otomatis...", disp_clean)
+                subprocess.Popen(
+                    [xvfb_bin, disp_clean, "-screen", "0", "1366x768x24", "-nolisten", "tcp"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                for _ in range(20):
+                    time.sleep(0.1)
+                    if os.path.exists(sock_path):
+                        break
+            except Exception as exc:
+                log.warning("Gagal auto-start Xvfb %s: %s", disp_clean, exc)
+    return disp_clean
 
 def get_fingerprint(email):
     """Generate a deterministic fingerprint based on the email address."""
@@ -310,6 +342,7 @@ def post_review(
     business_category=None,
 ):
     slot_display = display or SLOT_DISPLAYS.get(slot_index, f":{99 + slot_index}")
+    slot_display = ensure_virtual_display(slot_display)
     os.environ["DISPLAY"] = slot_display
 
     profile_dir = session_manager.get_profile_dir(email)
@@ -610,6 +643,7 @@ def delete_own_review_on_maps(email, maps_url, business_name, email_id=None, bus
     and remove it from Google Maps publicly.
     """
     slot_display = display or SLOT_DISPLAYS.get(slot_index, f":{99 + slot_index}")
+    slot_display = ensure_virtual_display(slot_display)
     os.environ["DISPLAY"] = slot_display
 
     profile_dir = session_manager.get_profile_dir(email)
@@ -765,6 +799,7 @@ def run_reviews(business_id, biz, config, delay=60, max_parallel=6):
 
     def execute_slot_job(slot_idx, review_row, total_slots=1):
         slot_display = SLOT_DISPLAYS.get(slot_idx, f":{99 + slot_idx}")
+        slot_display = ensure_virtual_display(slot_display)
         db.init_db()
 
         star = review_row["star_rating"] or 5
