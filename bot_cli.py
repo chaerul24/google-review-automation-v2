@@ -1207,10 +1207,23 @@ def run_task_stream(
                         line_out = format_task_log_line(ts, lvl, msg, email=l_email, account_name=l_aname)
                         print(line_out)
 
-                        if "Worker selesai memproses" in msg or "berhasil dikirim" in msg:
+                        if "Worker selesai memproses" in msg:
                             task_finished = True
 
                     if task_finished and status == "idle":
+                        time.sleep(1.2)
+                        try:
+                            log_data = client.get_logs(business_id)
+                            for l in log_data.get("logs", []):
+                                if l["id"] not in seen_ids:
+                                    seen_ids.add(l["id"])
+                                    lvl = (l.get("level") or "info").lower()
+                                    ts = l.get("created_at", "").split()[-1]
+                                    msg = l.get("message", "")
+                                    sys.stdout.write("\r\033[K")
+                                    print(format_task_log_line(ts, lvl, msg, email=l.get("email", ""), account_name=l.get("account_name", "")))
+                        except Exception:
+                            pass
                         break
                 except Exception:
                     pass

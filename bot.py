@@ -592,7 +592,7 @@ def post_review(
 
         # --- Confirm the review iframe is open before generating text ---
         sb.wait_for_element_visible(iframe_sel, timeout=30)
-        db.add_process_log(business_id, "Form review Google Maps sudah terbuka.", email_id)
+        db.add_process_log(business_id, f"[{email}] Form review Google Maps sudah terbuka.", email_id)
         sb.sleep(5)  # Brief wait before polling for the textarea
 
         # Wait for the textarea inside the iframe to become available (up to 60s)
@@ -614,7 +614,7 @@ def post_review(
         sb.sleep(random.uniform(2, 5))
 
         # Generate review text now that we know the write box is open and star is selected
-        db.add_process_log(business_id, "Membuat teks ulasan (kontekstual bidang usaha) dan memilih rating.", email_id)
+        db.add_process_log(business_id, f"[{email}] Membuat teks ulasan (kontekstual bidang usaha) dan memilih rating.", email_id)
         review_text = generate_review(
             business_name,
             review_prompt,
@@ -639,7 +639,7 @@ def post_review(
             sb.sleep(random.uniform(2, 5))
 
         # Click the Post button inside the iframe by text content (stable, no dynamic attributes)
-        db.add_process_log(business_id, "Mengirim review ke Google Maps.", email_id)
+        db.add_process_log(business_id, f"[{email}] Mengirim review ke Google Maps.", email_id)
         sb.evaluate("""
             var iframe = document.querySelector("iframe[name='goog-reviews-write-widget']");
             var doc = iframe.contentDocument || iframe.contentWindow.document;
@@ -655,7 +655,7 @@ def post_review(
         sb.sleep(random.uniform(3, 5))
         db.update_review_status(email_id, "reviewed", review_text, star_rating)
         log.info("Review posted successfully for %s", email)
-        db.add_process_log(business_id, "Review berhasil dikirim.", email_id, "success")
+        db.add_process_log(business_id, f"[{email}] Review ulasan berhasil dikirim ke Google Maps.", email_id, "success")
         return True
 
     except Exception as exc:
