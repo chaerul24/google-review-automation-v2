@@ -199,35 +199,46 @@ class Spinner:
             print(final_text)
 
 
-def print_punctuation_mascot(padding: str = "       "):
-    """Render high-tech cyber mascot made of punctuation characters (:;.,)."""
-    lines = [
-        f"{padding}{C_CYAN}.::;:::::::::::::::::::::::::;:.{C_RESET}",
-        f"{padding}{C_CYAN}:;{C_BLUE}''''   .-----------------.   {C_CYAN}''{C_BLUE};:{C_RESET}",
-        f"{padding}{C_CYAN}::;{C_RESET}    /   {C_GREEN}.---.{C_RESET}     {C_GREEN}.---.{C_RESET} \\    {C_CYAN};::{C_RESET}",
-        f"{padding}{C_CYAN}::;{C_RESET}   |   {C_BOLD}{C_GREEN}(  ●  ){C_RESET} {C_YELLOW}:{C_RESET} {C_BOLD}{C_GREEN}(  ●  ){C_RESET} |   {C_CYAN};::{C_RESET}",
-        f"{padding}{C_CYAN}::;{C_RESET}   |    {C_GREEN}'---'{C_RESET} {C_CYAN}.:.{C_RESET} {C_GREEN}'---'{C_RESET}  |   {C_CYAN};::{C_RESET}",
-        f"{padding}{C_CYAN}::;{C_RESET}   |       {C_MAGENTA}.:::::.{C_RESET}       |   {C_CYAN};::{C_RESET}",
-        f"{padding}{C_CYAN}::;{C_RESET}   |      {C_BOLD}{C_YELLOW}'======='{C_RESET}      |   {C_CYAN};::{C_RESET}",
-        f"{padding}{C_CYAN}':;..{C_RESET} \\  {C_DIM}...............{C_RESET}  / {C_CYAN}..;:'{C_RESET}",
-        f"{padding}{C_CYAN}'::;:::::::::::::::::::;::'{C_RESET}",
-    ]
-    for l in lines:
-        print(l)
+# ── Google Maps Seeklogo Text Art & UI ───────────────────────────────────────
+
+GOOGLE_MAPS_ICON_LINES = [
+    '                      \x1b[97m:\x1b[37m.\x1b[90m.\x1b[91m%%%%\x1b[37m..\x1b[97m:\x1b[0m    ',
+    '                   \x1b[97m:\x1b[37m.\x1b[91m%@@@@@@@@@@%\x1b[97m:\x1b[0m  ',
+    ' \x1b[37m.\x1b[90m................\x1b[37m.\x1b[91m%@@%%%@@@%%%%@@\x1b[37m.\x1b[0m ',
+    '\x1b[90m.\x1b[92m;##;#############\x1b[90m.\x1b[91m@%%%@%\x1b[90m....\x1b[91m%%%%%@\x1b[37m.\x1b[0m',
+    '\x1b[92m####\x1b[94m~\x1b[97m:::::\x1b[92m########\x1b[91m%%%%%@\x1b[90m......\x1b[91m%%%%@\x1b[90m.\x1b[0m',
+    '\x1b[92m###\x1b[37m.\x1b[0m \x1b[90m.\x1b[92m##\x1b[90m..\x1b[92m########\x1b[90m.\x1b[91m@%%%%@\x1b[90m...\x1b[91m%@%%%@@\x1b[97m:\x1b[0m',
+    '\x1b[92m###\x1b[97m:\x1b[0m \x1b[92m#;#\x1b[37m..\x1b[0m  \x1b[92m#######\x1b[91m%@%%%%%%%%%%%@@\x1b[97m:\x1b[0m ',
+    '\x1b[92m####\x1b[37m.\x1b[97m::\x1b[37m..\x1b[97m::\x1b[90m.\x1b[92m######\x1b[90m.\x1b[93m=\x1b[90m.\x1b[91m@@%%%%%@%%@%\x1b[97m:\x1b[0m  ',
+    '\x1b[92m######\x1b[90m...\x1b[92m#######\x1b[93m======\x1b[91m%@%%%%%%@\x1b[90m.\x1b[97m:\x1b[0m   ',
+    '\x1b[92m##############\x1b[93m=======\x1b[97m::\x1b[90m.\x1b[91m@%%%@@\x1b[37m.\x1b[97m:\x1b[0m    ',
+    '\x1b[92m############\x1b[93m======\x1b[97m::::::\x1b[37m.\x1b[91m@%@%\x1b[37m.\x1b[97m::\x1b[0m    ',
+    '\x1b[92m##########\x1b[93m======\x1b[97m:\x1b[0m     \x1b[97m:::\x1b[90m.\x1b[91m@@\x1b[37m.\x1b[97m:::\x1b[0m    ',
+    '\x1b[92m########\x1b[93m======\x1b[37m.\x1b[94m~~\x1b[37m.\x1b[97m:\x1b[0m     \x1b[97m::\x1b[91m@%\x1b[97m::::\x1b[0m    ',
+    '\x1b[92m######\x1b[93m======\x1b[37m.\x1b[94m~~~~~~\x1b[37m.\x1b[97m:\x1b[0m     \x1b[37m..\x1b[97m::::\x1b[0m    ',
+    '\x1b[92m####\x1b[93m======\x1b[37m.\x1b[94m~~~~~~~~~~\x1b[37m.\x1b[97m:\x1b[0m     \x1b[97m::::\x1b[0m    ',
+    '\x1b[92m##\x1b[93m======\x1b[37m.\x1b[94m~~~~~~~~~~~~~~\x1b[37m.\x1b[97m:\x1b[0m     \x1b[97m::\x1b[0m    ',
+    '\x1b[93m======\x1b[37m.\x1b[94m~~~~~~~~~~~~~~~~~~~\x1b[97m:\x1b[0m         ',
+    '\x1b[97m:\x1b[37m.\x1b[93m==\x1b[37m.\x1b[94m~~~~~~~~~~~~~~~~~~~~~~\x1b[37m.\x1b[97m:\x1b[0m       ',
+]
+
+
+def print_google_maps_logo(padding: str = "                  "):
+    """Render Google Maps Icon text logo (from seeklogo 268336) using colorized text & punctuation."""
+    for line in GOOGLE_MAPS_ICON_LINES:
+        print(f"{padding}{line}")
+    print()
+    brand_title = (
+        f"                   {C_BOLD}{C_BLUE}G{C_RED}o{C_YELLOW}o{C_BLUE}g{C_GREEN}l{C_RED}e{C_RESET} "
+        f"{C_BOLD}{C_WHITE}Maps{C_RESET} {C_BOLD}{C_CYAN}Review Automation Bot{C_RESET}"
+    )
+    print(brand_title)
 
 
 def print_banner(client: ServerClient, status_info: Optional[Dict[str, Any]] = None):
     print()
-    print_punctuation_mascot("                       ")
-    print()
-    print(f"{C_BOLD}{C_CYAN}       ___         __        ____        __  _      {C_RESET}")
-    print(f"{C_BOLD}{C_CYAN}      /   | __  __/ /_____  / __ )____  / /_(_)  __ {C_RESET}")
-    print(f"{C_BOLD}{C_CYAN}     / /| |/ / / / __/ __ \\/ __  / __ \\/ __/ / |/_/ {C_RESET}")
-    print(f"{C_BOLD}{C_CYAN}    / ___ / /_/ / /_/ /_/ / /_/ / /_/ / /_/ />  <   {C_RESET}")
-    print(f"{C_BOLD}{C_CYAN}   /_/  |_\\__,_/\\__/\\____/_____/\\____/\\__/_/_/|_|   {C_RESET}")
-    print()
-    print(f"       {C_BOLD}{C_WHITE}« NATIVE LINUX CHROMIUM • ZERO-VM ARCHITECTURE »{C_RESET}")
-    print(f"            {C_DIM}AutoBotix Google Review Automation Client{C_RESET}")
+    print_google_maps_logo("                  ")
+    print(f"               {C_DIM}« Native Chromium • Zero-VM Architecture »{C_RESET}")
     print()
 
     user_label = client.username or "admin"
@@ -252,7 +263,7 @@ def prompt_login(client: ServerClient, default_user: str = "admin") -> bool:
 
     os.system("cls" if os.name == "nt" else "clear")
     print()
-    print_punctuation_mascot("                       ")
+    print_google_maps_logo("                  ")
     print()
     print(f" ╔══════════════════════════════════════════════════════════════════════╗")
     print(f" ║ {C_BOLD}{C_YELLOW}                   AUTENTIKASI PENGGUNA (LOGIN)                       {C_RESET}║")

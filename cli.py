@@ -95,15 +95,24 @@ def get_stats() -> Dict[str, Any]:
 
 # ── UI Components ─────────────────────────────────────────────────────────────
 
-MASCOT_ART = """[bold cyan]        .::;:::::::::::::::::::::::::;:.[/bold cyan]
-[bold cyan]       :;[blue]''''   .-----------------.   [/blue]''[blue];:[/blue][/bold cyan]
-[bold cyan]      ::;[/bold cyan]    /   [bold green].---.[/bold green]     [bold green].---.[/bold green] \\    [bold cyan];::[/bold cyan]
-[bold cyan]      ::;[/bold cyan]   |   [bold green](  ●  )[/bold green] [bold yellow]:[/bold yellow] [bold green](  ●  )[/bold green] |   [bold cyan];::[/bold cyan]
-[bold cyan]      ::;[/bold cyan]   |    [bold green]'---'[/bold green] [cyan].:.[/cyan] [bold green]'---'[/bold green]  |   [bold cyan];::[/bold cyan]
-[bold cyan]      ::;[/bold cyan]   |       [magenta].:::::.[/magenta]       |   [bold cyan];::[/bold cyan]
-[bold cyan]      ::;[/bold cyan]   |      [bold yellow]'======='[/bold yellow]      |   [bold cyan];::[/bold cyan]
-[bold cyan]       ':;..[/bold cyan] \\  [dim]...............[/dim]  / [bold cyan]..;:'[/bold cyan]
-[bold cyan]         '::;:::::::::::::::::::;::'[/bold cyan]"""
+GOOGLE_MAPS_ICON_ART = """                      [bold white]:[/bold white][white]..[/white][bold red]%%%%[/bold red][white]..[/white][bold white]:[/bold white]
+                   [bold white]:[/bold white][white].[/white][bold red]%@@@@@@@@@@%[/bold red][bold white]:[/bold white]
+ [white]..................[/white][bold red]%@@%%%@@@%%%%@@[/bold red][white].[/white]
+[dim white].[/dim white][bold green];##;#############[/bold green][dim white].[/dim white][bold red]@%%%@%[/bold red][dim white]....[/dim white][bold red]%%%%%@[/bold red][white].[/white]
+[bold green]####[/bold green][bold blue]~[/bold blue][bold white]:::::[/bold white][bold green]########[/bold green][bold red]%%%%%@[/bold red][dim white]......[/dim white][bold red]%%%%@[/bold red][dim white].[/dim white]
+[bold green]###[/bold green][white].[/white] [dim white].[/dim white][bold green]##[/bold green][dim white]..[/dim white][bold green]########[/bold green][dim white].[/dim white][bold red]@%%%%@[/bold red][dim white]...[/dim white][bold red]%@%%%@@[/bold red][bold white]:[/bold white]
+[bold green]###[/bold green][bold white]:[/bold white] [bold green]#;#[/bold green][white]..[/white]  [bold green]#######[/bold green][bold red]%@%%%%%%%%%%%@@[/bold red][bold white]:[/bold white]
+[bold green]####[/bold green][white].[/white][bold white]::[/bold white][white]..[/white][bold white]::[/bold white][dim white].[/dim white][bold green]######[/bold green][dim white].[/dim white][bold yellow]=[/bold yellow][dim white].[/dim white][bold red]@@%%%%%@%%@%[/bold red][bold white]:[/bold white]
+[bold green]######[/bold green][dim white]...[/dim white][bold green]#######[/bold green][bold yellow]======[/bold yellow][bold red]%@%%%%%%@[/bold red][dim white].[/dim white][bold white]:[/bold white]
+[bold green]##############[/bold green][bold yellow]=======[/bold yellow][bold white]::[/bold white][dim white].[/dim white][bold red]@%%%@@[/bold red][white].[/white][bold white]:[/bold white]
+[bold green]############[/bold green][bold yellow]======[/bold yellow][bold white]::::::[/bold white][white].[/white][bold red]@%@%[/bold red][white].[/white][bold white]::[/bold white]
+[bold green]##########[/bold green][bold yellow]======[/bold yellow][bold white]:[/bold white]     [bold white]:::[/bold white][dim white].[/dim white][bold red]@@[/bold red][white].[/white][bold white]:::[/bold white]
+[bold green]########[/bold green][bold yellow]======[/bold yellow][white].[/white][bold blue]~~[/bold blue][white].[/white][bold white]:[/bold white]     [bold white]::[/bold white][bold red]@%[/bold red][bold white]::::[/bold white]
+[bold green]######[/bold green][bold yellow]======[/bold yellow][white].[/white][bold blue]~~~~~~[/bold blue][white].[/white][bold white]:[/bold white]     [white]..[/white][bold white]::::[/bold white]
+[bold green]####[/bold green][bold yellow]======[/bold yellow][white].[/white][bold blue]~~~~~~~~~~[/bold blue][white].[/white][bold white]:[/bold white]     [bold white]::::[/bold white]
+[bold green]##[/bold green][bold yellow]======[/bold yellow][white].[/white][bold blue]~~~~~~~~~~~~~~[/bold blue][white].[/white][bold white]:[/bold white]     [bold white]::[/bold white]
+[bold yellow]======[/bold yellow][white].[/white][bold blue]~~~~~~~~~~~~~~~~~~~[/bold blue][bold white]:[/bold white]
+[bold white]:[/bold white][white].[/white][bold yellow]==[/bold yellow][white].[/white][bold blue]~~~~~~~~~~~~~~~~~~~~~~[/bold blue][white].[/white][bold white]:[/bold white]"""
 
 
 def render_banner() -> Panel:
@@ -115,15 +124,17 @@ def render_banner() -> Panel:
     ])
     chrom_ver = get_chromium_version()
 
-    banner_text = f"""{MASCOT_ART}
+    brand_header = (
+        "[bold blue]G[/bold blue][bold red]o[/bold red][bold yellow]o[/bold yellow]"
+        "[bold blue]g[/bold blue][bold green]l[/bold green][bold red]e[/bold red] "
+        "[bold white]Maps[/bold white] [bold cyan]Review Automation Bot[/bold cyan]"
+    )
 
-[bold cyan]    ___         __        ____        __  _      [/bold cyan]
-[bold cyan]   /   | __  __/ /_____  / __ )____  / /_(_)  __ [/bold cyan]
-[bold cyan]  / /| |/ / / / __/ __ \\/ __  / __ \\/ __/ / |/_/ [/bold cyan]
-[bold cyan] / ___ / /_/ / /_/ /_/ / /_/ / /_/ / /_/ />  <   [/bold cyan]
-[bold cyan]/_/  |_\\__,_/\\__/\\____/_____/\\____/\\__/_/_/|_|   [/bold cyan]
+    banner_text = f"""{GOOGLE_MAPS_ICON_ART}
 
-[bold white]{APP_TITLE}[/bold white] • [bold green]{APP_SUBTITLE}[/bold green]
+{brand_header}
+[dim]« Native Chromium • Zero-VM Architecture »[/dim]
+
 [dim]Engine: {chrom_ver} | Display Xvfb: {active_disp_str}[/dim]
 [dim]Target Bisnis: [bold white]{stats['businesses']}[/bold white] | Akun Google: [bold white]{stats['accounts']}[/bold white] | Cookie Aktif: [bold green]{stats['active_cookies']}[/bold green] | Ulasan Selesai: [bold green]{stats['reviewed']}[/bold green] | Antrean: [bold yellow]{stats['pending']}[/bold yellow][/dim]"""
 
