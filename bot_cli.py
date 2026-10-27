@@ -1260,7 +1260,7 @@ def run_task_stream(
     if mode == "queue":
         print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Metode Eksekusi{C_RESET} ────> {C_GREEN}📋 Mode Daftar Antrean (1 Akun Bergiliran - Anti-Bot Safe){C_RESET}")
         print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Jumlah Antrean{C_RESET}  ─────> {C_CYAN}{count} Akun Terjadwal Berurutan{C_RESET}")
-        print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Jeda Alami Bot{C_RESET}  ─────> {C_YELLOW}~{delay} detik antar akun ulasan (Perilaku Alami){C_RESET}")
+        print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Jeda Antar Akun{C_RESET} ─────> {C_YELLOW}{delay} detik tetap di setiap antrean{C_RESET}")
     else:
         print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Metode Eksekusi{C_RESET} ────> {C_YELLOW}⚡ Mode Paralel ({count} Layar Chromium Serentak){C_RESET}")
         print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Jumlah Browser{C_RESET}  ─────> {C_CYAN}{count} Layar Chromium Paralel{C_RESET}")
@@ -1286,8 +1286,7 @@ def run_task_stream(
             if s_idx == 0:
                 est = f"{C_GREEN}[Giliran Pertama • Segera Jalan 🚀]{C_RESET}"
             else:
-                est_sec = s_idx * delay
-                est = f"{C_YELLOW}[Antrean #{s_idx + 1} • Estimasi Jeda ~{est_sec}s ⏳]{C_RESET}"
+                est = f"{C_YELLOW}[Antrean #{s_idx + 1} • Jeda Tetap {delay}s ⏳]{C_RESET}"
 
             print(f" {C_CYAN}│   {sub_branch}{C_RESET} [Urutan #{s_idx + 1}] {C_WHITE}{lbl}{C_RESET} ──> {est}")
             time.sleep(0.04)
