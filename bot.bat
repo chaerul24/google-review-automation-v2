@@ -13,9 +13,12 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: Sync latest bot_cli.py from server (192.168.1.17)
-echo [1/2] Menghubungkan ke server AutoBotix (192.168.1.17)...
+:: Sync latest bot_cli.py from server (coba local LAN 192.168.1.17:5000, fallback ke domain publik autobotix.my.id)
+echo [1/2] Menghubungkan dan menyinkronkan bot_cli.py terbaru...
 curl.exe -s --connect-timeout 2 http://192.168.1.17:5000/download/bot_cli.py -o "%~dp0bot_cli.py.tmp"
+if not exist "%~dp0bot_cli.py.tmp" (
+    curl.exe -s --connect-timeout 4 https://autobotix.my.id/download/bot_cli.py -o "%~dp0bot_cli.py.tmp"
+)
 if exist "%~dp0bot_cli.py.tmp" (
     for %%A in ("%~dp0bot_cli.py.tmp") do (
         if %%~zA gtr 1000 (
@@ -27,7 +30,8 @@ if exist "%~dp0bot_cli.py.tmp" (
 )
 
 if not exist "%~dp0bot_cli.py" (
-    echo [ERROR] Gagal mengunduh bot_cli.py dari server! Pastikan IP 192.168.1.17 aktif.
+    echo [ERROR] Gagal mengunduh bot_cli.py dari server!
+    echo Pastikan server aktif atau unduh manual dari: https://autobotix.my.id/download/bot_cli.py
     pause
     exit /b 1
 )

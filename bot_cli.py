@@ -92,6 +92,30 @@ class ServerClient:
                 msg = f"HTTP {err.code}: {err.reason}"
             raise RuntimeError(msg)
         except urllib.error.URLError as err:
+            if "192.168.1.17" in self.base_url:
+                try:
+                    self.base_url = "https://autobotix.my.id"
+                    url = f"{self.base_url}/api/cli/login"
+                    req = urllib.request.Request(
+                        url,
+                        data=payload,
+                        headers={
+                            "User-Agent": "AutoBotix-Windows-CLI/1.0",
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                        },
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        if data.get("authenticated"):
+                            self.api_key = data.get("api_key") or password
+                            self.username = data.get("username", username)
+                            self.role = data.get("role", "administrator" if self.username.lower() == "admin" else "user")
+                            self.is_admin = (self.role == "administrator" or self.username.lower() in ("admin",))
+                            return data
+                except Exception:
+                    self.base_url = "http://192.168.1.17:5000"
             raise ConnectionError(f"Tidak dapat terhubung ke server {self.base_url}: {err.reason}")
 
     def register(self, username: str, password: str) -> Dict[str, Any]:
@@ -123,6 +147,30 @@ class ServerClient:
                 msg = f"HTTP {err.code}: {err.reason}"
             raise RuntimeError(msg)
         except urllib.error.URLError as err:
+            if "192.168.1.17" in self.base_url:
+                try:
+                    self.base_url = "https://autobotix.my.id"
+                    url = f"{self.base_url}/api/cli/login"
+                    req = urllib.request.Request(
+                        url,
+                        data=payload,
+                        headers={
+                            "User-Agent": "AutoBotix-Windows-CLI/1.0",
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                        },
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        if data.get("authenticated"):
+                            self.api_key = data.get("api_key") or password
+                            self.username = data.get("username", username)
+                            self.role = data.get("role", "administrator" if self.username.lower() == "admin" else "user")
+                            self.is_admin = (self.role == "administrator" or self.username.lower() in ("admin",))
+                            return data
+                except Exception:
+                    self.base_url = "http://192.168.1.17:5000"
             raise ConnectionError(f"Tidak dapat terhubung ke server {self.base_url}: {err.reason}")
 
     def _request(self, endpoint: str, method: str = "GET", data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -160,6 +208,19 @@ class ServerClient:
                 msg = f"HTTP {err.code}: {err.reason}"
             raise RuntimeError(msg)
         except urllib.error.URLError as err:
+            if "192.168.1.17" in self.base_url:
+                try:
+                    self.base_url = "https://autobotix.my.id"
+                    url = f"{self.base_url}{endpoint}"
+                    req = urllib.request.Request(url, data=body_bytes, headers=headers, method=method)
+                    with urllib.request.urlopen(req, timeout=12) as resp:
+                        resp_text = resp.read().decode("utf-8")
+                        try:
+                            return json.loads(resp_text)
+                        except Exception:
+                            return {"status": "ok", "raw": resp_text}
+                except Exception:
+                    self.base_url = "http://192.168.1.17:5000"
             raise ConnectionError(f"Gagal terhubung ke server di {self.base_url}: {err.reason}")
 
     def add_cookie(self, cookie_json: str, email: str = "") -> Dict[str, Any]:
