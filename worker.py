@@ -53,7 +53,10 @@ def process_pending_jobs():
             "Processing business '%s' (id=%s) with %ds delay and %d max screens.",
             biz["name"], biz_id, delay, max_parallel,
         )
-        db.add_process_log(biz_id, f"Worker mulai memproses antrean review (hingga {max_parallel} layar paralel).")
+        if max_parallel == 1:
+            db.add_process_log(biz_id, f"Worker mulai memproses daftar antrean review secara berurutan (1 akun per waktu, jeda anti-bot {delay} detik).")
+        else:
+            db.add_process_log(biz_id, f"Worker mulai memproses antrean review (hingga {max_parallel} layar paralel).")
         bot.run_reviews(biz_id, biz, config, delay=delay, max_parallel=max_parallel)
         db.add_process_log(biz_id, "Worker selesai memproses antrean saat ini.")
         log.info("Finished business '%s' (id=%s).", biz["name"], biz_id)
@@ -73,7 +76,10 @@ def process_business(biz_id):
 
     delay = max(5, int(config.get("delay_seconds") or 60))
     max_parallel = max(1, min(6, int(config.get("screen_count") or 6)))
-    db.add_process_log(biz_id, f"Worker mulai langsung memproses review baru (hingga {max_parallel} layar paralel).")
+    if max_parallel == 1:
+        db.add_process_log(biz_id, f"Worker mulai langsung memproses daftar antrean review secara berurutan (1 akun per waktu, jeda anti-bot {delay} detik).")
+    else:
+        db.add_process_log(biz_id, f"Worker mulai langsung memproses review baru (hingga {max_parallel} layar paralel).")
     bot.run_reviews(biz_id, biz, config, delay=delay, max_parallel=max_parallel)
     db.add_process_log(biz_id, "Worker selesai memproses review saat ini.")
 

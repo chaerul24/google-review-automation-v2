@@ -1478,10 +1478,43 @@ def process_log(business_id):
     if not db.get_business(business_id):
         return jsonify({"status": "error", "message": "Business not found"}), 404
     reviews = db.get_reviews_for_business(business_id)
+    has_active = any(row["status"] == "reviewing" for row in reviews)
+    has_pending = any(row["status"] == "pending" for row in reviews)
+    status_label = "reviewing" if has_active else ("queued" if has_pending else "idle")
     return jsonify({
-        "status": "reviewing" if any(row["status"] == "reviewing" for row in reviews) else "idle",
+        "status": status_label,
         "logs": db.get_process_logs(business_id),
     })
+
+
+@app.route("/api/queue", methods=["GET"])
+@app.route("/api/businesses/<int:business_id>/queue", methods=["GET"])
+@login_required
+def get_review_queue(business_id=None):
+    """Return active review queue across all businesses or for a specific business."""
+    with db.get_db() as conn:
+        query = """
+            SELECT r.id, r.business_id, b.name as business_name, r.email_id, e.email,
+                   COALESCE(c.account_name, e.account_name, '') as account_name,
+                   r.star_rating, r.status, r.created_at, r.reviewed_at
+            FROM reviews r
+            JOIN businesses b ON r.business_id = b.id
+            JOIN emails e ON r.email_id = e.id
+            LEFT JOIN cookies c ON e.email = c.email
+        """
+        params = []
+        if business_id:
+            query += " WHERE r.business_id = ?"
+            params.append(business_id)
+        query += " ORDER BY CASE r.status WHEN 'reviewing' THEN 1 WHEN 'pending' THEN 2 ELSE 3 END, r.created_at ASC LIMIT 100"
+        rows = conn.execute(query, params).fetchall()
+        q_list = [dict(r) for r in rows]
+        return jsonify({
+            "status": "ok",
+            "queue": q_list,
+            "pending_count": sum(1 for r in q_list if r["status"] == "pending"),
+            "reviewing_count": sum(1 for r in q_list if r["status"] == "reviewing"),
+        })
 
 
 @app.route("/business/<int:business_id>/clear-logs", methods=["POST"])
@@ -2761,6 +2794,21 @@ def start_bot(business_id):
             "message": "Tidak dapat menjalankan task: Tidak ada akun dengan status AKTIF. Seluruh akun berstatus 'PERLU LOGIN' atau belum memiliki cookie valid. Harap tambahkan atau perbarui cookie aktif di menu Kelola Cookie."
         }), 400
 
+    # Handle execution mode: queue (default anti-bot safe) vs parallel
+    mode = str(payload.get("mode") or "queue").lower()
+    if mode == "queue":
+        screen_count = 1
+    else:
+        screen_count = max(1, min(6, int(payload.get("screen_count") or payload.get("count") or 1)))
+
+    delay_seconds = max(5, int(payload.get("delay_seconds") or 60))
+
+    # Save to review_configs so worker and bot.run_reviews picks up the queue mode and natural delay
+    cfg = db.get_review_config(business_id) or {}
+    cfg["screen_count"] = screen_count
+    cfg["delay_seconds"] = delay_seconds
+    db.save_review_config(business_id, cfg)
+
     created, already_pending = db.create_review_jobs(business_id, star_list, language_list=language_list, allowed_email_ids=allowed_email_ids)
     if created == 0 and already_pending == 0:
         return jsonify({
@@ -2768,9 +2816,10 @@ def start_bot(business_id):
             "message": "Tidak ada akun dengan cookie AKTIF yang dapat ditugaskan untuk target ini. Silakan tambahkan cookie akun baru atau reset ulasan target."
         }), 400
 
+    mode_label = f"Mode Antrean (1 akun bergiliran, jeda {delay_seconds}s)" if screen_count == 1 else f"Mode Paralel ({screen_count} layar)"
     db.add_process_log(
         business_id,
-        f"{created} tugas review masuk ke antrean" + (f" ({already_pending} tugas sudah ada)." if already_pending else "."),
+        f"{created} tugas review masuk ke daftar antrean [{mode_label}]" + (f" ({already_pending} tugas sudah ada)." if already_pending else "."),
     )
 
     try:

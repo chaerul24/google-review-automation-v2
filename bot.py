@@ -1032,6 +1032,12 @@ def run_reviews(business_id, biz, config, delay=60, max_parallel=6):
 
         remaining = db.get_pending_reviews(business_id)
         if remaining:
-            actual_delay = max(5, int(delay))
+            actual_delay = max(10, int(delay))
+            next_acc = remaining[0].get("email", "akun berikutnya")
+            db.add_process_log(
+                business_id,
+                f"⏳ [JEDA ANTREAN ANTI-BOT] Menunggu jeda alami {actual_delay} detik sebelum akun antrean berikutnya ({next_acc}) masuk...",
+                level="info",
+            )
             time.sleep(actual_delay)
             run_reviews(business_id, biz, config, delay=delay, max_parallel=max_parallel)

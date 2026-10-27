@@ -267,13 +267,21 @@ class ServerClient:
             "business_category": category,
         })
 
-    def start_task(self, business_id: int, count: int = 1, star_rating: int = 5) -> Dict[str, Any]:
+    def start_task(self, business_id: int, count: int = 1, star_rating: int = 5, mode: str = "queue", delay: int = 60) -> Dict[str, Any]:
         payload = {
             "count": count,
             f"star_{star_rating}_count": count,
             "selected_language": "Indonesian",
+            "mode": mode,
+            "delay_seconds": delay,
+            "screen_count": 1 if mode == "queue" else count,
         }
         return self._request(f"/api/businesses/{business_id}/start-bot", method="POST", data=payload)
+
+    def get_queue(self, business_id: Optional[int] = None) -> Dict[str, Any]:
+        """Fetch active review queue."""
+        ep = f"/api/businesses/{business_id}/queue" if business_id else "/api/queue"
+        return self._request(ep)
 
     def stop_task(self, business_id: int) -> Dict[str, Any]:
         return self._request(f"/api/businesses/{business_id}/stop-bot", method="POST")
@@ -885,6 +893,123 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
                 time.sleep(2)
 
 
+# ── Queue & Antrean Handler ───────────────────────────────────────────────────
+
+def print_queue_table(queue_items: List[Dict[str, Any]], title: str = "DAFTAR ANTREAN REVIEW (LIVE QUEUE)"):
+    print()
+    box_header(f"{C_BOLD}{C_CYAN}{title}{C_RESET}")
+    if not queue_items:
+        print(f"  {C_GREEN}✓ Antrean kosong! Tidak ada tugas review yang sedang menunggu atau berjalan.{C_RESET}\n")
+        return
+
+    print(f" {C_BOLD}{'NO':<4} {'STATUS / URUTAN':<22} {'TARGET BISNIS':<22} {'AKUN EMAIL':<26} {'RATING':<8}{C_RESET}")
+    print(" " + "─" * 84)
+
+    pending_idx = 0
+    for idx, item in enumerate(queue_items, 1):
+        status = (item.get("status") or "pending").lower()
+        stars = "★" * int(item.get("star_rating") or 5)
+        biz = (item.get("business_name") or f"Bisnis #{item.get('business_id')}")[:20]
+        email = (item.get("email") or "-")[:24]
+
+        if status == "reviewing":
+            st_str = f"{C_BLUE}⚡ Sedang Diproses{C_RESET}"
+        elif status == "pending":
+            pending_idx += 1
+            st_str = f"{C_YELLOW}⏳ Antrean #{pending_idx}{C_RESET}"
+        elif status in ("reviewed", "posted"):
+            st_str = f"{C_GREEN}✓ Sukses Terbit{C_RESET}"
+        elif status in ("failed", "error"):
+            st_str = f"{C_RED}✖ Gagal{C_RESET}"
+        else:
+            st_str = f"{C_DIM}{status.upper()}{C_RESET}"
+
+        st_pad = pad_to_display_width(st_str, 22)
+        print(f" {C_DIM}#{idx:<3}{C_RESET} {st_pad} {C_WHITE}{biz:<22}{C_RESET} {C_CYAN}{email:<26}{C_RESET} {C_YELLOW}{stars:<8}{C_RESET}")
+
+    pending_count = sum(1 for r in queue_items if r.get("status") == "pending")
+    active_count = sum(1 for r in queue_items if r.get("status") == "reviewing")
+    done_count = sum(1 for r in queue_items if r.get("status") in ("reviewed", "posted"))
+    print(" " + "─" * 84)
+    print(f" {C_DIM}Ringkasan:{C_RESET} {C_YELLOW}Menunggu Antrean: {pending_count}{C_RESET} │ {C_BLUE}Sedang Berjalan: {active_count}{C_RESET} │ {C_GREEN}Selesai: {done_count}{C_RESET} │ {C_WHITE}Total: {len(queue_items)}{C_RESET}\n")
+
+
+def handle_queue_menu(client: ServerClient, status_info: Dict[str, Any]):
+    """Interactive queue management and inspection."""
+    os.system("cls" if os.name == "nt" else "clear")
+    print_banner(client, status_info)
+
+    while True:
+        spin = Spinner("Memuat daftar antrean ulasan...")
+        spin.start()
+        try:
+            res = client.get_queue()
+            spin.stop()
+            q_list = res.get("queue", [])
+        except Exception as exc:
+            spin.stop()
+            print(f" {C_RED}✖ Gagal memuat antrean: {exc}{C_RESET}")
+            input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+            return
+
+        print_queue_table(q_list)
+
+        print(f" {C_BOLD}{C_CYAN}─── AKSI DAFTAR ANTREAN ───────────────────────────────────────────────{C_RESET}")
+        print(f"  {C_YELLOW}[1]{C_RESET} {C_WHITE}🔄 Segarkan Antrean (Refresh){C_RESET}")
+        print(f"  {C_YELLOW}[2]{C_RESET} {C_WHITE}🏢 Filter Antrean Berdasarkan Target Bisnis{C_RESET}")
+        print(f"  {C_YELLOW}[3]{C_RESET} {C_WHITE}🧹 Bersihkan Semua Antrean Pending (Reset){C_RESET}")
+        print(f"  {C_YELLOW}[0]{C_RESET} {C_DIM}↩️  Kembali ke Menu Utama{C_RESET}")
+        print()
+
+        try:
+            q_opt = input(f" {C_GREEN}Pilih aksi antrean [0-3] (default 1): {C_RESET}").strip() or "1"
+        except (KeyboardInterrupt, EOFError):
+            break
+
+        if q_opt == "0":
+            break
+        elif q_opt == "1":
+            os.system("cls" if os.name == "nt" else "clear")
+            print_banner(client, status_info)
+            continue
+        elif q_opt == "2":
+            businesses = status_info.get("businesses", [])
+            print_businesses(businesses)
+            bid_in = input(f" {C_GREEN}Masukkan ID Bisnis target: {C_RESET}").strip()
+            if bid_in.isdigit():
+                bid = int(bid_in)
+                spin = Spinner(f"Memuat antrean untuk Bisnis #{bid}...")
+                spin.start()
+                try:
+                    res_biz = client.get_queue(bid)
+                    spin.stop()
+                    print_queue_table(res_biz.get("queue", []), title=f"ANTREAN ULASAN - BISNIS #{bid}")
+                except Exception as exc:
+                    spin.stop()
+                    print(f" {C_RED}✖ Gagal: {exc}{C_RESET}")
+            input(f" {C_DIM}Tekan Enter untuk melanjutkan...{C_RESET}")
+            os.system("cls" if os.name == "nt" else "clear")
+            print_banner(client, status_info)
+        elif q_opt == "3":
+            businesses = status_info.get("businesses", [])
+            print_businesses(businesses)
+            bid_in = input(f" {C_GREEN}Masukkan ID Bisnis yang antreannya ingin direset: {C_RESET}").strip()
+            if bid_in.isdigit():
+                confirm = input(f" {C_RED}Yakin ingin mereset antrean bisnis #{bid_in}? [y/N]: {C_RESET}").strip().lower()
+                if confirm in ("y", "yes"):
+                    spin = Spinner("Mereset antrean ulasan...")
+                    spin.start()
+                    try:
+                        res_rst = client.clear_logs(int(bid_in))
+                        spin.stop(f" {C_GREEN}✓ {res_rst.get('message', 'Antrean berhasil direset.')}{C_RESET}")
+                    except Exception as exc:
+                        spin.stop()
+                        print(f" {C_RED}✖ Gagal: {exc}{C_RESET}")
+            input(f" {C_DIM}Tekan Enter untuk melanjutkan...{C_RESET}")
+            os.system("cls" if os.name == "nt" else "clear")
+            print_banner(client, status_info)
+
+
 # ── Remove Review Handler ─────────────────────────────────────────────────────
 
 def handle_remove_review_menu(client: ServerClient, status_info: Dict[str, Any]):
@@ -1122,41 +1247,73 @@ def run_task_stream(
     business_id: int,
     count: int = 1,
     star_rating: int = 5,
+    mode: str = "queue",
+    delay: int = 60,
     business_name: str = "",
     active_accounts: Optional[List[Dict[str, Any]]] = None,
 ):
     print()
-    print(f" {C_CYAN}┌── [2/3] MEMPERSIAPKAN TUGAS ULASAN BOT{C_RESET}")
+    print(f" {C_CYAN}┌── [2/3] MEMPERSIAPKAN DAFTAR ANTREAN TUGAS ULASAN BOT{C_RESET}")
     biz_label = business_name if business_name else f"Bisnis #{business_id}"
-    print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Target Bisnis{C_RESET}  ──────> {C_WHITE}{biz_label}{C_RESET}")
-    print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Jumlah Browser{C_RESET} ─────> {C_CYAN}{count} Layar Chromium Paralel{C_RESET}")
+    print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Target Bisnis{C_RESET}   ──────> {C_WHITE}{biz_label}{C_RESET}")
+
+    if mode == "queue":
+        print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Metode Eksekusi{C_RESET} ────> {C_GREEN}📋 Mode Daftar Antrean (1 Akun Bergiliran - Anti-Bot Safe){C_RESET}")
+        print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Jumlah Antrean{C_RESET}  ─────> {C_CYAN}{count} Akun Terjadwal Berurutan{C_RESET}")
+        print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Jeda Alami Bot{C_RESET}  ─────> {C_YELLOW}~{delay} detik antar akun ulasan (Perilaku Alami){C_RESET}")
+    else:
+        print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Metode Eksekusi{C_RESET} ────> {C_YELLOW}⚡ Mode Paralel ({count} Layar Chromium Serentak){C_RESET}")
+        print(f" {C_CYAN}│   ├──{C_RESET} {C_DIM}Jumlah Browser{C_RESET}  ─────> {C_CYAN}{count} Layar Chromium Paralel{C_RESET}")
+
     star_str = "⭐" * star_rating
-    print(f" {C_CYAN}│   └──{C_RESET} {C_DIM}Rating Target{C_RESET}  ─────> {C_YELLOW}{star_str}{C_RESET} {C_DIM}({star_rating} Bintang){C_RESET}")
+    print(f" {C_CYAN}│   └──{C_RESET} {C_DIM}Rating Target{C_RESET}   ─────> {C_YELLOW}{star_str}{C_RESET} {C_DIM}({star_rating} Bintang){C_RESET}")
     print(f" {C_CYAN}│{C_RESET}")
-    print(f" {C_CYAN}├── [PENUGASAN SLOT BROWSER & DISPLAY]{C_RESET}")
 
     assigned = (active_accounts or [])[:count]
-    for s_idx in range(count):
-        disp = f":{99 + s_idx}"
-        is_last = (s_idx == count - 1)
-        sub_branch = "└──" if is_last else "├──"
-        if s_idx < len(assigned):
-            acc = assigned[s_idx]
-            aname = (acc.get("account_name") or "").strip()
-            aemail = acc.get("email", "")
-            lbl = f"{aname} ({aemail})" if aname and aname != aemail else aemail
-        else:
-            lbl = f"Akun Aktif Slot #{s_idx + 1}"
-        print(f" {C_CYAN}│   {sub_branch}{C_RESET} [Slot {s_idx + 1}] Display {disp} ──> {C_WHITE}{lbl}{C_RESET} ──> {C_GREEN}[SIAP]{C_RESET}")
-        time.sleep(0.04)
+    if mode == "queue":
+        print(f" {C_CYAN}├── [URUTAN JADWAL DAFTAR ANTREAN AKUN]{C_RESET}")
+        for s_idx in range(count):
+            is_last = (s_idx == count - 1)
+            sub_branch = "└──" if is_last else "├──"
+            if s_idx < len(assigned):
+                acc = assigned[s_idx]
+                aname = (acc.get("account_name") or "").strip()
+                aemail = acc.get("email", "")
+                lbl = f"{aname} ({aemail})" if aname and aname != aemail else aemail
+            else:
+                lbl = f"Akun Antrean #{s_idx + 1}"
+
+            if s_idx == 0:
+                est = f"{C_GREEN}[Giliran Pertama • Segera Jalan 🚀]{C_RESET}"
+            else:
+                est_sec = s_idx * delay
+                est = f"{C_YELLOW}[Antrean #{s_idx + 1} • Estimasi Jeda ~{est_sec}s ⏳]{C_RESET}"
+
+            print(f" {C_CYAN}│   {sub_branch}{C_RESET} [Urutan #{s_idx + 1}] {C_WHITE}{lbl}{C_RESET} ──> {est}")
+            time.sleep(0.04)
+    else:
+        print(f" {C_CYAN}├── [PENUGASAN SLOT BROWSER & DISPLAY]{C_RESET}")
+        for s_idx in range(count):
+            disp = f":{99 + s_idx}"
+            is_last = (s_idx == count - 1)
+            sub_branch = "└──" if is_last else "├──"
+            if s_idx < len(assigned):
+                acc = assigned[s_idx]
+                aname = (acc.get("account_name") or "").strip()
+                aemail = acc.get("email", "")
+                lbl = f"{aname} ({aemail})" if aname and aname != aemail else aemail
+            else:
+                lbl = f"Akun Aktif Slot #{s_idx + 1}"
+            print(f" {C_CYAN}│   {sub_branch}{C_RESET} [Slot {s_idx + 1}] Display {disp} ──> {C_WHITE}{lbl}{C_RESET} ──> {C_GREEN}[SIAP]{C_RESET}")
+            time.sleep(0.04)
 
     print(f" {C_CYAN}│{C_RESET}")
     print(f" {C_CYAN}├── [PENGIRIMAN INSTRUKSI KE SERVER]{C_RESET}")
 
-    spin = Spinner("Mengirim instruksi task dan menginisialisasi browser di server...")
+    spin = Spinner("Mengirim instruksi antrean task ke server AutoBotix...")
     spin.start()
     try:
-        res = client.start_task(business_id, count=count, star_rating=star_rating)
+        res = client.start_task(business_id, count=count, star_rating=star_rating, mode=mode, delay=delay)
         spin.stop(f" {C_CYAN}│   └──{C_RESET} Dispatch API ───────> {C_BOLD}{C_GREEN}[BERHASIL DIJADWALKAN 🚀]{C_RESET} (Jobs: {res.get('jobs_created', count)}, Antrean: {res.get('already_pending', 0)})")
     except Exception as exc:
         spin.stop()
@@ -1231,7 +1388,12 @@ def run_task_stream(
             # Animate spinner on current bottom line (connected to tree trunk)
             sp_idx += 1
             sp_char = SPINNER_FRAMES[sp_idx % len(SPINNER_FRAMES)]
-            st_badge = f"{C_GREEN}{status.upper()}{C_RESET}" if status in ("running", "reviewing") else f"{C_YELLOW}{status.upper()}{C_RESET}"
+            if status in ("running", "reviewing"):
+                st_badge = f"{C_GREEN}SEDANG MEMPROSES{C_RESET}"
+            elif status == "queued":
+                st_badge = f"{C_YELLOW}JEDA ANTREAN{C_RESET}"
+            else:
+                st_badge = f"{C_CYAN}{status.upper()}{C_RESET}"
             sys.stdout.write(f"\r {C_CYAN}│   {sp_char}{C_RESET} {C_WHITE}Status: {st_badge} │ {C_DIM}Waktu:{C_RESET} {C_GREEN}{time_str}{C_RESET} │ {C_DIM}Tekan Ctrl+C untuk kembali{C_RESET}\033[K")
             sys.stdout.flush()
             time.sleep(0.09)
@@ -1288,20 +1450,21 @@ def interactive_menu(client: ServerClient):
         )
 
         menu_lines = [
-            f" {C_YELLOW}[1]{C_RESET} {C_WHITE}🚀  JALANKAN TASK{C_RESET}        {C_DIM}Mulai ulasan multi-browser otomatis{C_RESET}",
+            f" {C_YELLOW}[1]{C_RESET} {C_WHITE}🚀  JALANKAN TASK{C_RESET}        {C_DIM}Mulai ulasan otomatis (Antrean / Paralel){C_RESET}",
             f" {C_YELLOW}[2]{C_RESET} {C_WHITE}🏢  TARGET GOOGLE MAPS{C_RESET}   {C_DIM}Lihat daftar target & jumlah review{C_RESET}",
             f" {C_YELLOW}[3]{C_RESET} {C_WHITE}➕  TAMBAH BISNIS BARU{C_RESET}   {C_DIM}Daftarkan URL Google Maps baru{C_RESET}",
             cookie_menu_label,
             f" {C_YELLOW}[5]{C_RESET} {C_WHITE}📊  PANTAU LIVE LOGS{C_RESET}     {C_DIM}Lihat log proses aktivitas server{C_RESET}",
-            f" {C_YELLOW}[6]{C_RESET} {C_WHITE}🛑  EMERGENCY STOP{C_RESET}       {C_DIM}Hentikan semua worker & browser{C_RESET}",
-            f" {C_YELLOW}[7]{C_RESET} {C_WHITE}🔄  RESET ANTREAN{C_RESET}        {C_DIM}Bersihkan antrean ulasan & log bisnis{C_RESET}",
-            f" {C_YELLOW}[8]{C_RESET} {C_WHITE}🗑️   REMOVE ULASAN{C_RESET}        {C_DIM}Hapus ulasan database atau Google Maps{C_RESET}",
+            f" {C_YELLOW}[6]{C_RESET} {C_WHITE}📋  DAFTAR ANTREAN{C_RESET}       {C_DIM}Lihat status antrean ulasan & urutan{C_RESET}",
+            f" {C_YELLOW}[7]{C_RESET} {C_WHITE}🛑  EMERGENCY STOP{C_RESET}       {C_DIM}Hentikan semua worker & browser{C_RESET}",
+            f" {C_YELLOW}[8]{C_RESET} {C_WHITE}🔄  RESET ANTREAN{C_RESET}        {C_DIM}Bersihkan antrean ulasan & log bisnis{C_RESET}",
+            f" {C_YELLOW}[9]{C_RESET} {C_WHITE}🗑️   REMOVE ULASAN{C_RESET}        {C_DIM}Hapus ulasan database atau Google Maps{C_RESET}",
             f" {C_YELLOW}[0]{C_RESET} {C_RED}🚪  LOGOUT & KELUAR{C_RESET}      {C_DIM}Keluar dari sesi terminal{C_RESET}",
         ]
         print_box(menu_lines, width=68, title=f"{C_BOLD}{C_CYAN}DAFTAR MENU UTAMA{C_RESET}")
 
         try:
-            choice = input(f" {C_GREEN}Pilih menu [0-8] (default 1): {C_RESET}").strip() or "1"
+            choice = input(f" {C_GREEN}Pilih menu [0-9] (default 1): {C_RESET}").strip() or "1"
         except (KeyboardInterrupt, EOFError):
             print("\n Keluar.")
             break
@@ -1389,16 +1552,33 @@ def interactive_menu(client: ServerClient):
                 target_biz = next((b for b in businesses if b.get("id") == bid), None)
                 biz_name = target_biz.get("name", f"Bisnis #{bid}") if target_biz else f"Bisnis #{bid}"
 
-                max_slots = max(1, min(6, len(active_accs)))
-                slots_in = input(f" {C_GREEN}Jumlah Browser / Akun Paralel (1-{max_slots}, default 1): {C_RESET}").strip() or "1"
+                max_slots = len(active_accs)
+                slots_in = input(f" {C_GREEN}Jumlah Ulasan yang ingin dikirim (1-{max_slots}, default {max_slots}): {C_RESET}").strip() or str(max_slots)
                 slots = max(1, min(max_slots, int(slots_in) if slots_in.isdigit() else 1))
 
                 stars_in = input(f" {C_GREEN}Rating Bintang (1-5, default 5): {C_RESET}").strip() or "5"
                 stars = max(1, min(5, int(stars_in) if stars_in.isdigit() else 5))
 
-                confirm = input(f"\n {C_BOLD}Jalankan {slots} ulasan bintang {stars} untuk '{biz_name}' (ID {bid}) sekarang? [Y/n]: {C_RESET}").strip().lower()
+                print()
+                print(f" {C_BOLD}{C_CYAN}Pilih Metode Eksekusi Ulasan:{C_RESET}")
+                print(f"  {C_YELLOW}[1]{C_RESET} {C_BOLD}{C_GREEN}📋 Mode Daftar Antrean (1 Akun Bergiliran + Jeda Anti-Bot) [DIREKOMENDASIKAN]{C_RESET}")
+                print(f"      {C_DIM}Akun memposting ulasan satu per satu dengan jeda alami untuk menghindari deteksi spam/bot Google.{C_RESET}")
+                print(f"  {C_YELLOW}[2]{C_RESET} {C_WHITE}⚡ Mode Paralel ({slots} Layar Chromium Serentak){C_RESET}")
+                print(f"      {C_DIM}Membuka {slots} browser sekaligus secara bersamaan di virtual display.{C_RESET}")
+
+                m_in = input(f"\n {C_GREEN}Pilih mode eksekusi [1-2] (default 1): {C_RESET}").strip() or "1"
+                if m_in == "2":
+                    mode = "parallel"
+                    delay_val = 15
+                else:
+                    mode = "queue"
+                    d_in = input(f" {C_GREEN}Jeda alami antar ulasan (detik, default 60): {C_RESET}").strip() or "60"
+                    delay_val = max(10, int(d_in) if d_in.isdigit() else 60)
+
+                mode_title = f"Antrean {slots} Akun (Jeda {delay_val}s)" if mode == "queue" else f"Paralel {slots} Layar"
+                confirm = input(f"\n {C_BOLD}Jalankan {slots} ulasan bintang {stars} [{mode_title}] untuk '{biz_name}' (ID {bid}) sekarang? [Y/n]: {C_RESET}").strip().lower()
                 if confirm in ("", "y", "yes"):
-                    run_task_stream(client, bid, count=slots, star_rating=stars, business_name=biz_name, active_accounts=active_accs)
+                    run_task_stream(client, bid, count=slots, star_rating=stars, mode=mode, delay=delay_val, business_name=biz_name, active_accounts=active_accs)
             except Exception as exc:
                 print(f" {C_RED}Error: {exc}{C_RESET}")
 
@@ -1450,6 +1630,9 @@ def interactive_menu(client: ServerClient):
             input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
 
         elif choice == "6":
+            handle_queue_menu(client, status_info)
+
+        elif choice == "7":
             businesses = status_info.get("businesses", [])
             print_businesses(businesses)
             bid_in = input(f" {C_GREEN}Masukkan ID Bisnis yang ingin dihentikan task-nya: {C_RESET}").strip()
@@ -1464,7 +1647,7 @@ def interactive_menu(client: ServerClient):
                     print(f" {C_RED}Gagal menghentikan: {e}{C_RESET}")
             input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
 
-        elif choice == "7":
+        elif choice == "8":
             businesses = status_info.get("businesses", [])
             print_businesses(businesses)
             bid_in = input(f" {C_GREEN}Masukkan ID Bisnis yang ingin dibersihkan log-nya: {C_RESET}").strip()
@@ -1479,7 +1662,7 @@ def interactive_menu(client: ServerClient):
                     print(f" {C_RED}Gagal membersihkan log: {e}{C_RESET}")
             input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
 
-        elif choice == "8":
+        elif choice == "9":
             handle_remove_review_menu(client, status_info)
 
 
@@ -1497,8 +1680,14 @@ def main():
     # Command: run
     run_parser = subparsers.add_parser("run", help="Jalankan tugas ulasan langsung")
     run_parser.add_argument("--business", "-b", type=int, required=True, help="ID Bisnis target")
-    run_parser.add_argument("--slots", "-s", type=int, default=1, help="Jumlah browser paralel (1-6)")
+    run_parser.add_argument("--slots", "-s", type=int, default=1, help="Jumlah ulasan yang ingin dikirim")
     run_parser.add_argument("--stars", type=int, default=5, help="Rating bintang (1-5)")
+    run_parser.add_argument("--mode", "-m", choices=["queue", "parallel"], default="queue", help="Mode eksekusi: queue (anti-bot aman) atau parallel")
+    run_parser.add_argument("--delay", "-d", type=int, default=60, help="Jeda alami antar antrean akun dalam detik (default: 60)")
+
+    # Command: queue
+    q_parser = subparsers.add_parser("queue", help="Lihat daftar antrean review aktif")
+    q_parser.add_argument("--business", "-b", type=int, default=None, help="ID Bisnis target (opsional)")
 
     # Command: status
     subparsers.add_parser("status", help="Lihat status server")
@@ -1581,8 +1770,11 @@ def main():
                 sys.exit(1)
             res = client.delete_cookie(cookie_id=args.id, email=args.email)
             print(f"{C_GREEN}✓ {res.get('message', 'Cookie berhasil dihapus.')}{C_RESET}")
+        elif args.command == "queue":
+            res = client.get_queue(args.business)
+            print_queue_table(res.get("queue", []))
         elif args.command == "run":
-            run_task_stream(client, args.business, count=args.slots, star_rating=args.stars)
+            run_task_stream(client, args.business, count=args.slots, star_rating=args.stars, mode=args.mode, delay=args.delay)
         elif args.command == "review-del":
             if args.maps:
                 res = client.delete_maps_reviews_live(args.business, all_accounts=args.all_accounts)
