@@ -614,9 +614,31 @@ def api_cli_status():
             ORDER BY e.id ASC
         """).fetchall()
         cookies_list = conn.execute("""
-            SELECT c.id, c.email, COALESCE(c.account_name, '') AS account_name, c.status, c.last_checked_at, c.updated_at, c.error_reason
+            SELECT 
+                COALESCE(c.id, e.id) AS id,
+                e.email,
+                COALESCE(c.account_name, e.account_name, '') AS account_name,
+                CASE 
+                    WHEN c.cookie_json IS NULL OR c.cookie_json = '' THEN 'no_cookie'
+                    ELSE c.status 
+                END AS status,
+                c.last_checked_at,
+                COALESCE(c.updated_at, e.created_at) AS updated_at,
+                c.error_reason
+            FROM emails e
+            LEFT JOIN cookies c ON e.email = c.email
+            UNION
+            SELECT 
+                c.id,
+                c.email,
+                COALESCE(c.account_name, '') AS account_name,
+                c.status,
+                c.last_checked_at,
+                c.updated_at,
+                c.error_reason
             FROM cookies c
-            ORDER BY c.id ASC
+            WHERE c.email NOT IN (SELECT email FROM emails)
+            ORDER BY id ASC
         """).fetchall()
         rev_count = conn.execute("SELECT COUNT(*) FROM reviews WHERE status = 'reviewed'").fetchone()[0]
         pending_count = conn.execute("SELECT COUNT(*) FROM reviews WHERE status = 'pending'").fetchone()[0]
@@ -2801,6 +2823,16 @@ def test_cookie(cookie_id):
     cookies = db.get_all_cookies()
     target = next((c for c in cookies if c["id"] == cookie_id), None)
     if not target:
+        with db.get_db() as conn:
+            em_row = conn.execute("SELECT email FROM emails WHERE id = ?", (cookie_id,)).fetchone()
+            if em_row:
+                return jsonify({
+                    "status": "error",
+                    "email": em_row["email"],
+                    "is_valid": False,
+                    "session_status": "no_cookie",
+                    "reason": "Akun ini belum memiliki Cookie JSON. Silakan masukkan cookie terlebih dahulu."
+                }), 400
         return jsonify({"status": "error", "message": "Cookie tidak ditemukan."}), 404
 
     email = target["email"]

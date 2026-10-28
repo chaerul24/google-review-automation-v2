@@ -1080,6 +1080,8 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
                 st_badge = f"{C_RED}✖ KEDALUWARSA{C_RESET}"
             elif c_status == "needs_login":
                 st_badge = f"{C_YELLOW}▲ PERLU LOGIN{C_RESET}"
+            elif c_status in ("no_cookie", "none", "missing"):
+                st_badge = f"{C_MAGENTA}○ BELUM ADA COOKIE{C_RESET}"
             else:
                 st_badge = f"{C_DIM}- TIDAK AKTIF -{C_RESET}"
             line1 = f" {C_YELLOW}[#{cid}]{C_RESET} {C_WHITE}{C_BOLD}{name}{C_RESET} ──> {st_badge}"
@@ -1091,6 +1093,7 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
 
     print(f" {C_BOLD}{'ID':<5} {'NAMA AKUN GOOGLE':<24} {'EMAIL AKUN':<32} {'STATUS SESI':<16}{C_RESET}")
     print(" " + "─" * min(78, cols - 2))
+    has_no_cookie = False
     for c in cookies:
         cid = c.get("id")
         name = (c.get("account_name") or "-").strip()[:22]
@@ -1103,6 +1106,9 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
             st_color = f"{C_RED}✖ KEDALUWARSA{C_RESET}"
         elif c_status == "needs_login":
             st_color = f"{C_YELLOW}▲ PERLU LOGIN{C_RESET}"
+        elif c_status in ("no_cookie", "none", "missing"):
+            st_color = f"{C_MAGENTA}○ BELUM ADA COOKIE{C_RESET}"
+            has_no_cookie = True
         else:
             st_color = f"{C_DIM}- TIDAK AKTIF -{C_RESET}"
 
@@ -1110,6 +1116,9 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
         row = f" {C_YELLOW}{cid:<5}{C_RESET} {C_WHITE}{name:<24}{C_RESET} {C_CYAN}{email:<32}{C_RESET} {st_pad}"
         print(truncate_ansi(row, cols - 1))
     print()
+    if has_no_cookie:
+        print(f" {C_DIM}💡 Tips: Akun berstatus '{C_MAGENTA}○ BELUM ADA COOKIE{C_DIM}' baru didaftarkan lewat email/password.{C_RESET}")
+        print(f" {C_DIM}         Masukkan Cookie JSON akun tersebut melalui opsi [1] di bawah agar bot bisa login.{C_RESET}\n")
 
 
 def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
