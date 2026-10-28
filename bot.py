@@ -299,7 +299,6 @@ def setup_authenticated_session(sb, email, target_url="https://www.google.com/ma
     
     Alur:
     Pilih akun -> Muat cookie tersimpan -> Terapkan ke browser Chromium di domain google.com -> Verifikasi sesi -> Laporkan status.
-    Jika sesi tidak valid, batalkan proses tanpa mencoba login dengan email/password/TOTP.
     """
     sm = SessionManager()
     db.add_process_log(business_id, f"Memeriksa cookie sesi Google tersimpan untuk akun {email}.", email_id)
@@ -307,9 +306,9 @@ def setup_authenticated_session(sb, email, target_url="https://www.google.com/ma
     if not success:
         db.add_process_log(
             business_id,
-            f"Sesi cookie akun {email} tidak valid ({status.value}): {reason}. Proses autentikasi dihentikan.",
+            f"Sesi cookie akun {email} tidak valid ({status.value}): {reason}.",
             email_id,
-            "error",
+            "warning",
         )
         return False, status, reason
 
@@ -320,6 +319,111 @@ def setup_authenticated_session(sb, email, target_url="https://www.google.com/ma
         "success",
     )
     return True, status, reason
+
+
+def login_with_google_credentials(sb, email, password, totp_secret=None, business_id=None, email_id=None):
+    """Metode 2: Login otomatis ke Akun Google menggunakan Email, Password, dan TOTP jika diperlukan."""
+    if not password:
+        return False, "Password tidak tersedia untuk akun ini."
+
+    db.add_process_log(business_id, f"[{email}] Membuka halaman login Google (accounts.google.com)...", email_id)
+    try:
+        sb.get("https://accounts.google.com/signin/v2/identifier?hl=en")
+        sb.sleep(random.uniform(3, 5))
+
+        cur = sb.get_current_url()
+        # Jika profil browser sebelumnya sudah dalam keadaan login:
+        if "myaccount.google.com" in cur or "google.com/maps" in cur:
+            db.add_process_log(business_id, f"[{email}] Profil browser sudah login sebelumnya.", email_id)
+            session_manager.sync_browser_cookies_to_db(sb, email)
+            return True, "Sudah login."
+
+        # Input Email Google
+        email_sel = 'input[type="email"], #identifierId, input[name="identifier"]'
+        sb.wait_for_element_visible(email_sel, timeout=15)
+        sb.click(email_sel)
+        sb.sleep(1)
+        sb.type(email_sel, email)
+        sb.sleep(random.uniform(1.5, 2.5))
+
+        # Klik Next Email
+        sb.click('#identifierNext, button:contains("Next")')
+        sb.sleep(random.uniform(4, 6))
+
+        # Cek jika ada error akun tidak ditemukan
+        body_txt = (sb.get_text("body") or "").lower()
+        if "couldn't find your google account" in body_txt or "tidak dapat menemukan akun" in body_txt:
+            return False, "Akun Google tidak ditemukan atau salah ketik."
+
+        # Input Password
+        pwd_sel = 'input[type="password"], input[name="Passwd"], input[name="password"]'
+        sb.wait_for_element_visible(pwd_sel, timeout=20)
+        sb.click(pwd_sel)
+        sb.sleep(1)
+        sb.type(pwd_sel, password)
+        sb.sleep(random.uniform(1.5, 2.5))
+
+        # Klik Next Password
+        sb.click('#passwordNext, button:contains("Next")')
+        sb.sleep(random.uniform(5, 7))
+
+        # Cek Password Salah
+        body_txt = (sb.get_text("body") or "").lower()
+        if "wrong password" in body_txt or "sandi salah" in body_txt:
+            return False, "Password salah."
+
+        # Cek verifikasi 2 Langkah / TOTP Google Authenticator
+        totp_sel = 'input[name="totpPin"], #totpPin, input[type="tel"]'
+        if sb.is_element_visible(totp_sel):
+            if totp_secret:
+                db.add_process_log(business_id, f"[{email}] Memasukkan kode 2FA / TOTP Authenticator...", email_id)
+                clean_totp = str(totp_secret).replace(" ", "").strip()
+                code_2fa = pyotp.TOTP(clean_totp).now()
+                sb.click(totp_sel)
+                sb.sleep(1)
+                sb.type(totp_sel, code_2fa)
+                sb.sleep(random.uniform(1.5, 2))
+                sb.click('#totpNext, button:contains("Next")')
+                sb.sleep(random.uniform(5, 8))
+            else:
+                return False, "Akun meminta kode verifikasi 2FA/TOTP tetapi secret 2FA tidak disediakan."
+
+        # Lewati prompt konfirmasi pemulihan/not now jika muncul
+        for skip_btn in [
+            'button:contains("Not now")',
+            'button:contains("Jangan sekarang")',
+            'button:contains("Skip")',
+            'button:contains("Lewati")',
+            'button:contains("Cancel")',
+            'a:contains("Not now")',
+        ]:
+            try:
+                if sb.is_element_visible(skip_btn):
+                    sb.click(skip_btn)
+                    sb.sleep(2)
+            except Exception:
+                pass
+
+        # Verifikasi di Google Maps
+        sb.get("https://www.google.com/maps?hl=en")
+        sb.sleep(random.uniform(4, 6))
+
+        cur_url = sb.get_current_url()
+        signin_btns = sb.find_elements("a[aria-label*='Sign in'], a[aria-label*='Masuk']")
+        if signin_btns and ("signin" in cur_url or "accounts.google.com" in cur_url):
+            return False, "Login Google terhalang verifikasi keamanan Google."
+
+        # Simpan cookie sesi baru ke database otomatis!
+        session_manager.sync_browser_cookies_to_db(sb, email)
+        with db.get_db() as conn:
+            conn.execute("UPDATE emails SET flagged = 0, fail_count = 0 WHERE email = ?", (email,))
+
+        db.add_process_log(business_id, f"[{email}] ✓ Login akun Google dengan kredensial berhasil (Cookie otomatis tersimpan).", email_id, "success")
+        return True, "Login berhasil."
+
+    except Exception as exc:
+        log.warning("Login with credentials failed for %s: %s", email, exc)
+        return False, str(exc)
 
 
 def _extract_cid_from_maps_url(maps_url: str) -> int | None:
@@ -447,13 +551,35 @@ def post_review(
         sb.maximize()
         sb.sleep(2)
 
-        # ── Step: Setup Authenticated Session via Cookie (NO PASSWORD FALLBACK) ──
-        auth_ok, auth_status, auth_reason = setup_authenticated_session(
-            sb, email, verification_url, business_id=business_id, email_id=email_id
-        )
+        # ── Step: Setup Authenticated Session (2 METODE: Cookie & Login Kredensial) ──
+        auth_ok = False
+        cookie_available = db.get_cookie_for_email(email) is not None
+
+        if cookie_available:
+            db.add_process_log(business_id, f"[{email}] [Cara 1] Menggunakan Cookie Sesi Google tersimpan...", email_id)
+            c_ok, c_status, c_reason = setup_authenticated_session(
+                sb, email, verification_url, business_id=business_id, email_id=email_id
+            )
+            if c_ok:
+                auth_ok = True
+            else:
+                log.info("Cookie session invalid for %s: %s. Checking credential fallback...", email, c_reason)
+
         if not auth_ok:
-            log.warning("Authentication failed via cookies for %s: %s", email, auth_reason)
-            # Stop immediately. Do NOT fall back to email, password, or TOTP typing!
+            if password:
+                db.add_process_log(business_id, f"[{email}] [Cara 2] Masuk menggunakan Email & Password Akun Google...", email_id)
+                l_ok, l_msg = login_with_google_credentials(
+                    sb, email, password, totp_secret=totp_secret, business_id=business_id, email_id=email_id
+                )
+                if l_ok:
+                    auth_ok = True
+                else:
+                    db.add_process_log(business_id, f"[{email}] ✖ Login kredensial gagal: {l_msg}.", email_id, "error")
+            else:
+                db.add_process_log(business_id, f"[{email}] ✖ Tidak dapat masuk: Cookie tidak valid/tersedia dan Password belum diisi.", email_id, "error")
+
+        if not auth_ok:
+            log.warning("Authentication failed for %s via both Cookie and Credential methods.", email)
             db.update_review_status(email_id, "failed", None, star_rating)
             return False
 

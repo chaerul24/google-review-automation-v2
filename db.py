@@ -452,17 +452,19 @@ def get_review_for_business(review_id, business_id):
 def get_pending_reviews(business_id):
     """Emails assigned to this business run that haven't been posted yet.
     Excludes emails that have been flagged after too many failures.
-    Strictly limited to accounts with active cookies ('active').
+    Supports 2 authentication methods:
+    1. Akun dengan Cookie aktif (c.status = 'active')
+    2. Akun dengan kredensial login Google (e.password IS NOT NULL)
     """
     with get_db() as conn:
         rows = conn.execute(
             """SELECT r.*, e.email, e.password, e.totp_secret, COALESCE(c.account_name, e.account_name, '') AS account_name, c.status AS cookie_status
                FROM reviews r
                JOIN emails e ON e.id = r.email_id
-               JOIN cookies c ON e.email = c.email
+               LEFT JOIN cookies c ON e.email = c.email
                WHERE r.business_id = ? AND r.status = 'pending'
                  AND COALESCE(e.flagged, 0) = 0
-                 AND c.status = 'active'
+                 AND (c.status = 'active' OR (e.password IS NOT NULL AND e.password != ''))
                ORDER BY r.created_at ASC""",
             (business_id,),
         ).fetchall()
@@ -532,7 +534,7 @@ def create_review_jobs(business_id, star_list, type_list=None, language_list=Non
         # Pull unflagged emails from pool that are not in active_or_done
         # Prioritize active cookies, deduplicate sessions, and shuffle randomly
         all_emails = conn.execute(
-            """SELECT e.id, e.email, c.cookie_json, c.status AS cookie_status
+            """SELECT e.id, e.email, e.password, c.cookie_json, c.status AS cookie_status
                FROM emails e
                LEFT JOIN cookies c ON e.email = c.email
                WHERE COALESCE(e.flagged, 0) = 0"""
@@ -572,13 +574,16 @@ def create_review_jobs(business_id, star_list, type_list=None, language_list=Non
                     continue
                 seen_sessions.add(sess_sig)
 
-            if r["cookie_status"] == "active":
+            has_pwd = bool(r.get("password") and str(r.get("password")).strip())
+            if r.get("cookie_status") == "active":
                 active_cookie_ids.append(r["id"])
-            # Hanya akun dengan cookie aktif ('active') yang diikutsertakan ke dalam antrean task
+            elif has_pwd:
+                other_ids.append(r["id"])
 
-        # Acak urutan akun aktif
+        # Urutkan penugasan: prioritaskan akun dengan cookie aktif dulu, lalu akun dengan kredensial login
         random.shuffle(active_cookie_ids)
-        available = active_cookie_ids
+        random.shuffle(other_ids)
+        available = active_cookie_ids + other_ids
         if not available:
             return 0, len(pending_email_ids)
 

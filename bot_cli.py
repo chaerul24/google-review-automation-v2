@@ -2172,7 +2172,10 @@ def interactive_menu(client: ServerClient):
                 continue
 
             accounts = cur_status.get("accounts", [])
-            active_accs = [a for a in accounts if a.get("cookie_status") == "active"]
+            usable_accs = [
+                a for a in accounts
+                if (a.get("cookie_status") == "active") or (a.get("has_password"))
+            ]
 
             # Visualisasi tree per akun dengan status dan panah alur
             limit_show = 12
@@ -2183,19 +2186,23 @@ def interactive_menu(client: ServerClient):
                 c_st = a.get("cookie_status") or "no_cookie"
                 acc_name = (a.get("account_name") or "").strip()
                 email = a.get("email", "")
+                has_pwd = bool(a.get("has_password"))
+
                 if acc_name:
                     lbl = f"{C_BOLD}{acc_name}{C_RESET} {C_DIM}({email}){C_RESET}"
                 else:
                     lbl = f"{C_CYAN}{email}{C_RESET}"
 
                 if c_st == "active":
-                    badge = f"{C_GREEN}● AKTIF{C_RESET} {C_DIM}[Siap Digunakan]{C_RESET}"
+                    badge = f"{C_GREEN}● AKTIF (Cookie){C_RESET} {C_DIM}[Siap Jalan]{C_RESET}"
+                elif has_pwd:
+                    badge = f"{C_CYAN}🔑 SIAP (Login Email/Pass){C_RESET} {C_DIM}[Auto-Login]{C_RESET}"
                 elif c_st == "needs_login":
-                    badge = f"{C_YELLOW}▲ PERLU LOGIN{C_RESET} {C_DIM}[Dilewati]{C_RESET}"
+                    badge = f"{C_YELLOW}▲ PERLU LOGIN (No Pass){C_RESET} {C_DIM}[Dilewati]{C_RESET}"
                 elif c_st == "expired":
                     badge = f"{C_RED}✖ KEDALUWARSA{C_RESET} {C_DIM}[Dilewati]{C_RESET}"
                 else:
-                    badge = f"{C_DIM}- TIDAK ADA COOKIE - [Dilewati]{C_RESET}"
+                    badge = f"{C_DIM}- BELUM SIAP (No Cookie/Pass) - [Dilewati]{C_RESET}"
 
                 print(f" {C_CYAN}│   {branch}{C_RESET} [Akun {idx}] {lbl} ────> {badge}")
                 time.sleep(0.02)
@@ -2205,14 +2212,22 @@ def interactive_menu(client: ServerClient):
                 print(f" {C_CYAN}│   └──{C_RESET} {C_DIM}... dan {rem} akun lainnya terdata di database{C_RESET}")
 
             print(f" {C_CYAN}│{C_RESET}")
-            if not active_accs:
-                print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_RED}✖ Tidak dapat menjalankan task: Tidak ada akun dengan status AKTIF.{C_RESET}")
-                print(f"     {C_YELLOW}Semua akun saat ini berstatus 'PERLU LOGIN' atau belum memiliki cookie valid.{C_RESET}")
-                print(f"     {C_DIM}Silakan periksa atau tambahkan cookie aktif terlebih dahulu di menu [4] Status Cookie.{C_RESET}")
+            if not usable_accs:
+                print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_RED}✖ Tidak dapat menjalankan task: Tidak ada akun dengan Cookie Aktif atau Password.{C_RESET}")
+                print(f"     {C_YELLOW}Daftarkan Cookie JSON di menu [4] atau tambahkan Email & Password akun di web dashboard.{C_RESET}")
                 input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
                 continue
 
-            print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_GREEN}✓ Terdeteksi {len(active_accs)} akun dengan sesi AKTIF siap menjalankan ulasan.{C_RESET}")
+            cookie_cnt = sum(1 for a in usable_accs if a.get("cookie_status") == "active")
+            cred_cnt = sum(1 for a in usable_accs if a.get("cookie_status") != "active" and a.get("has_password"))
+            desc_parts = []
+            if cookie_cnt:
+                desc_parts.append(f"{cookie_cnt} via Cookie")
+            if cred_cnt:
+                desc_parts.append(f"{cred_cnt} via Login Akun")
+            desc_str = ", ".join(desc_parts)
+
+            print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_GREEN}✓ Terdeteksi {len(usable_accs)} akun SIAP menjalankan ulasan ({desc_str}).{C_RESET}")
 
             businesses = cur_status.get("businesses", [])
             print_businesses(businesses)
@@ -2230,7 +2245,7 @@ def interactive_menu(client: ServerClient):
                 target_biz = next((b for b in businesses if b.get("id") == bid), None)
                 biz_name = target_biz.get("name", f"Bisnis #{bid}") if target_biz else f"Bisnis #{bid}"
 
-                max_slots = len(active_accs)
+                max_slots = len(usable_accs)
                 slots_in = input(f" {C_GREEN}Jumlah Ulasan yang ingin dikirim (1-{max_slots}, default {max_slots}): {C_RESET}").strip() or str(max_slots)
                 slots = max(1, min(max_slots, int(slots_in) if slots_in.isdigit() else 1))
 
@@ -2256,7 +2271,7 @@ def interactive_menu(client: ServerClient):
                 mode_title = f"Antrean {slots} Akun (Jeda {delay_val}s)" if mode == "queue" else f"Paralel {slots} Layar"
                 confirm = input(f"\n {C_BOLD}Jalankan {slots} ulasan bintang {stars} [{mode_title}] untuk '{biz_name}' (ID {bid}) sekarang? [Y/n]: {C_RESET}").strip().lower()
                 if confirm in ("", "y", "yes"):
-                    run_task_stream(client, bid, count=slots, star_rating=stars, mode=mode, delay=delay_val, business_name=biz_name, active_accounts=active_accs)
+                    run_task_stream(client, bid, count=slots, star_rating=stars, mode=mode, delay=delay_val, business_name=biz_name, active_accounts=usable_accs)
             except Exception as exc:
                 print(f" {C_RED}Error: {exc}{C_RESET}")
 

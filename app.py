@@ -608,7 +608,8 @@ def api_cli_status():
     businesses = db.get_all_businesses()
     with db.get_db() as conn:
         accounts = conn.execute("""
-            SELECT e.id, e.email, COALESCE(e.account_name, c.account_name, '') AS account_name, e.flagged, c.status AS cookie_status
+            SELECT e.id, e.email, COALESCE(e.account_name, c.account_name, '') AS account_name, e.flagged, c.status AS cookie_status,
+                   (CASE WHEN e.password IS NOT NULL AND TRIM(e.password) != '' THEN 1 ELSE 0 END) AS has_password
             FROM emails e
             LEFT JOIN cookies c ON e.email = c.email
             ORDER BY e.id ASC
