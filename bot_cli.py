@@ -27,8 +27,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 # Version Tracking & Manifest
-CLI_VERSION = "v1.0.3"
-CLI_VERSION_CODE = 103
+CLI_VERSION = "v1.0.4"
+CLI_VERSION_CODE = 104
 
 # Enable ANSI colors on Windows cmd.exe
 if sys.platform == "win32":
@@ -346,11 +346,91 @@ class ServerClient:
 
 # ── UI Helpers & Animation ───────────────────────────────────────────────────
 
+ANSI_REGEX = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+
+
+def strip_ansi(s: str) -> str:
+    """Strip ANSI escape sequences for accurate character width calculation."""
+    return ANSI_REGEX.sub('', s)
+
+
+def str_display_width(s: str) -> int:
+    """Calculate terminal column width of string, accounting for wide emojis and ignoring ANSI codes."""
+    clean = strip_ansi(s)
+    width = 0
+    for ch in clean:
+        if unicodedata.east_asian_width(ch) in ('W', 'F'):
+            width += 2
+        else:
+            width += 1
+    return width
+
+
+def truncate_ansi(s: str, max_w: int) -> str:
+    """Safely truncate string containing ANSI color codes to max visible display width."""
+    if max_w <= 0:
+        return ""
+    current_w = 0
+    i = 0
+    out = []
+    has_ansi = False
+    while i < len(s):
+        m = ANSI_REGEX.match(s, i)
+        if m:
+            out.append(m.group(0))
+            has_ansi = True
+            i = m.end()
+            continue
+        ch = s[i]
+        cw = 2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
+        if current_w + cw > max_w - 1:
+            out.append("…")
+            if has_ansi:
+                out.append(C_RESET)
+            return "".join(out)
+        out.append(ch)
+        current_w += cw
+        i += 1
+    if has_ansi:
+        out.append(C_RESET)
+    return "".join(out)
+
+
+def get_terminal_width(default: int = 80) -> int:
+    """Get active terminal column width with safe fallback."""
+    try:
+        cols = shutil.get_terminal_size((default, 24)).columns
+        return max(35, cols)
+    except Exception:
+        return default
+
+
+def clear_screen():
+    """Clear terminal screen and scrollback buffer cleanly across Windows, Linux, and Termux."""
+    if sys.platform == "win32":
+        os.system("cls")
+    else:
+        # \033[2J clears screen, \033[H cursor to top-left, \033[3J clears scrollback buffer
+        sys.stdout.write("\033[2J\033[H\033[3J")
+        sys.stdout.flush()
+        try:
+            os.system("clear 2>/dev/null")
+        except Exception:
+            pass
+
+
+def pad_to_display_width(text: str, width: int) -> str:
+    """Pad string with spaces on right to reach exact target visible column width."""
+    current_w = str_display_width(text)
+    pad = max(0, width - current_w)
+    return text + (' ' * pad)
+
+
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
 class Spinner:
-    """Animated terminal spinner running in a background thread."""
+    """Animated terminal spinner running in a background thread with strict mobile & Termux bounds."""
 
     def __init__(self, message: str = "Memproses..."):
         self.message = message
@@ -359,12 +439,24 @@ class Spinner:
 
     def _spin(self):
         idx = 0
-        while self.running:
-            frame = SPINNER_FRAMES[idx % len(SPINNER_FRAMES)]
-            sys.stdout.write(f"\r {C_CYAN}{frame}{C_RESET} {C_WHITE}{self.message}{C_RESET}\033[K")
+        # Hide cursor during spin to prevent blinking & position glitches in Termux
+        sys.stdout.write("\033[?25l")
+        sys.stdout.flush()
+        try:
+            while self.running:
+                frame = SPINNER_FRAMES[idx % len(SPINNER_FRAMES)]
+                cols = get_terminal_width()
+                # Frame + space takes 3 visible columns (" ⠋ ")
+                max_msg_len = max(10, cols - 6)
+                disp_msg = truncate_ansi(self.message, max_msg_len)
+                sys.stdout.write(f"\r {C_CYAN}{frame}{C_RESET} {C_WHITE}{disp_msg}{C_RESET}\033[K")
+                sys.stdout.flush()
+                time.sleep(0.08)
+                idx += 1
+        finally:
+            # Restore cursor
+            sys.stdout.write("\033[?25h")
             sys.stdout.flush()
-            time.sleep(0.08)
-            idx += 1
 
     def start(self, message: Optional[str] = None):
         if message:
@@ -380,10 +472,12 @@ class Spinner:
         self.running = False
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=0.25)
-        sys.stdout.write("\r\033[K")
+        # Clear line and restore cursor
+        sys.stdout.write("\r\033[K\033[?25h")
         sys.stdout.flush()
         if final_text:
-            print(final_text)
+            cols = get_terminal_width()
+            print(truncate_ansi(final_text, cols - 1) if str_display_width(final_text) >= cols else final_text)
 
 
 # ── Google Maps Seeklogo Text Art & UI ───────────────────────────────────────
@@ -410,53 +504,44 @@ GOOGLE_MAPS_ICON_LINES = [
 ]
 
 
-def print_google_maps_logo(padding: str = "                  "):
-    """Render Google Maps Icon text logo (from seeklogo 268336) using colorized text & punctuation."""
+def print_google_maps_logo(padding: Optional[str] = None):
+    """Render Google Maps Icon text logo (seeklogo 268336) centered and responsive."""
+    cols = get_terminal_width()
+    logo_w = 45
+    if padding is None:
+        pad_len = max(0, min(18, (cols - logo_w) // 2))
+        padding = " " * pad_len
+
     for line in GOOGLE_MAPS_ICON_LINES:
-        print(f"{padding}{line}")
+        l_text = line if cols >= 50 else line.strip()
+        print(f"{padding}{l_text}")
     print()
-    brand_title = (
-        f"                   {C_BOLD}{C_BLUE}G{C_RED}o{C_YELLOW}o{C_BLUE}g{C_GREEN}l{C_RED}e{C_RESET} "
-        f"{C_BOLD}{C_WHITE}Maps{C_RESET} {C_BOLD}{C_CYAN}Review Automation Bot{C_RESET}"
-    )
-    print(brand_title)
-
-
-ANSI_REGEX = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
-
-
-def strip_ansi(s: str) -> str:
-    """Strip ANSI escape sequences for accurate character width calculation."""
-    return ANSI_REGEX.sub('', s)
-
-
-def str_display_width(s: str) -> int:
-    """Calculate terminal column width of string, accounting for wide emojis and ignoring ANSI codes."""
-    clean = strip_ansi(s)
-    width = 0
-    for ch in clean:
-        if unicodedata.east_asian_width(ch) in ('W', 'F'):
-            width += 2
-        else:
-            width += 1
-    return width
-
-
-def pad_to_display_width(text: str, width: int) -> str:
-    """Pad string with spaces on right to reach exact target visible column width."""
-    current_w = str_display_width(text)
-    pad = max(0, width - current_w)
-    return text + (' ' * pad)
+    if cols >= 55:
+        brand_colored = (
+            f"{C_BOLD}{C_BLUE}G{C_RED}o{C_YELLOW}o{C_BLUE}g{C_GREEN}l{C_RED}e{C_RESET} "
+            f"{C_BOLD}{C_WHITE}Maps{C_RESET} {C_BOLD}{C_CYAN}Review Automation Bot{C_RESET}"
+        )
+    else:
+        brand_colored = (
+            f"{C_BOLD}{C_BLUE}G{C_RED}o{C_YELLOW}o{C_BLUE}g{C_GREEN}l{C_RED}e{C_RESET} "
+            f"{C_BOLD}{C_WHITE}Maps{C_RESET} {C_BOLD}{C_CYAN}Bot{C_RESET}"
+        )
+    b_w = str_display_width(brand_colored)
+    b_pad = max(0, (cols - b_w) // 2)
+    print(f"{' ' * b_pad}{brand_colored}")
 
 
 def print_box(lines: List[str], width: int = 68, title: Optional[str] = None):
     """Print an automatically sized and aligned unicode box.
-    Guarantees that every row's right border ║ aligns with the box corners.
+    Guarantees that every row's right border ║ aligns with the box corners
+    and strictly does not wrap on Termux or narrow mobile screens.
     """
+    cols = get_terminal_width()
+    max_allowed = max(26, cols - 4)
     content_widths = [str_display_width(l) for l in lines]
     if title:
         content_widths.append(str_display_width(title))
-    inner_width = max(width, max(content_widths) if content_widths else width)
+    inner_width = min(max_allowed, max(min(width, max_allowed), max(content_widths) if content_widths else width))
 
     top = f" ╔{'═' * (inner_width + 2)}╗"
     sep = f" ╠{'═' * (inner_width + 2)}╣"
@@ -464,61 +549,96 @@ def print_box(lines: List[str], width: int = 68, title: Optional[str] = None):
 
     print(top)
     if title:
-        t_w = str_display_width(title)
+        t_trunc = truncate_ansi(title, inner_width)
+        t_w = str_display_width(t_trunc)
         t_pad_left = (inner_width - t_w) // 2
         t_pad_right = inner_width - t_w - t_pad_left
-        print(f" ║ {' ' * t_pad_left}{title}{' ' * t_pad_right} ║")
+        print(f" ║ {' ' * t_pad_left}{t_trunc}{' ' * t_pad_right} ║")
         print(sep)
 
     for line in lines:
-        cur_w = str_display_width(line)
+        line_fit = truncate_ansi(line, inner_width)
+        cur_w = str_display_width(line_fit)
         pad = max(0, inner_width - cur_w)
-        print(f" ║ {line}{' ' * pad} ║")
+        print(f" ║ {line_fit}{' ' * pad} ║")
 
     print(bot)
 
 
 def box_header(title: str, width: int = 68):
     """Print a single-row boxed banner header with perfect alignment."""
-    t_w = str_display_width(title)
-    inner_width = max(width, t_w)
+    cols = get_terminal_width()
+    max_allowed = max(26, cols - 4)
+    t_trunc = truncate_ansi(title, max_allowed)
+    t_w = str_display_width(t_trunc)
+    inner_width = min(max_allowed, max(min(width, max_allowed), t_w))
     t_pad_left = (inner_width - t_w) // 2
     t_pad_right = inner_width - t_w - t_pad_left
     print(f" ╔{'═' * (inner_width + 2)}╗")
-    print(f" ║ {' ' * t_pad_left}{title}{' ' * t_pad_right} ║")
+    print(f" ║ {' ' * t_pad_left}{t_trunc}{' ' * t_pad_right} ║")
     print(f" ╚{'═' * (inner_width + 2)}╝")
 
 
+def print_header_screen(client: Optional[ServerClient] = None, title: Optional[str] = None, status_info: Optional[Dict[str, Any]] = None):
+    """Clear screen and display the Google Maps logo & AutoBotix Header cleanly on any device."""
+    clear_screen()
+    cols = get_terminal_width()
+    print()
+    print_google_maps_logo()
+
+    sub = "« Native Chromium • Zero-VM Architecture »"
+    if cols < 50:
+        sub = "Zero-VM Architecture"
+    sub_pad = max(0, (cols - str_display_width(sub)) // 2)
+    print(f"{' ' * sub_pad}{C_DIM}{sub}{C_RESET}")
+
+    ver = f"AutoBotix CLI {CLI_VERSION}"
+    ver_pad = max(0, (cols - str_display_width(ver)) // 2)
+    print(f"{' ' * ver_pad}{C_BOLD}{C_GREEN}{ver}{C_RESET}")
+    print()
+
+    if client:
+        user_label = client.username or "admin"
+        if cols >= 68:
+            lines = [
+                f"{C_DIM}Host Server:{C_RESET} {C_GREEN}{client.base_url}{C_RESET}   {C_DIM}User:{C_RESET} {C_CYAN}{user_label}{C_RESET}   {C_DIM}Versi:{C_RESET} {C_YELLOW}{CLI_VERSION}{C_RESET}"
+            ]
+        else:
+            lines = [
+                f"{C_DIM}Host:{C_RESET} {C_GREEN}{client.base_url}{C_RESET}",
+                f"{C_DIM}User:{C_RESET} {C_CYAN}{user_label}{C_RESET} │ {C_DIM}Versi:{C_RESET} {C_YELLOW}{CLI_VERSION}{C_RESET}"
+            ]
+        if status_info:
+            b_cnt = status_info.get("businesses_count", 0)
+            a_cnt = status_info.get("accounts_count", 0)
+            c_cnt = status_info.get("active_cookies", 0)
+            r_cnt = status_info.get("reviewed_count", 0)
+            p_cnt = status_info.get("pending_count", 0)
+            disps = " ".join(status_info.get("displays", []))
+            if cols >= 68:
+                lines.append(f"Target: {C_WHITE}{b_cnt}{C_RESET} │ Akun: {C_WHITE}{a_cnt}{C_RESET} │ Cookie: {C_WHITE}{c_cnt}{C_RESET} │ Ulasan: {C_WHITE}{r_cnt}{C_RESET} │ Antrean: {C_WHITE}{p_cnt}{C_RESET}")
+                if disps:
+                    lines.append(f"{C_DIM}Display Virtual Xvfb:{C_RESET} {C_CYAN}{disps}{C_RESET}")
+            else:
+                lines.append(f"Target: {C_WHITE}{b_cnt}{C_RESET} │ Akun: {C_WHITE}{a_cnt}{C_RESET} │ Cookie: {C_WHITE}{c_cnt}{C_RESET}")
+                lines.append(f"Ulasan: {C_WHITE}{r_cnt}{C_RESET} │ Antrean: {C_WHITE}{p_cnt}{C_RESET}")
+        print_box(lines, width=min(cols - 4, 68))
+
+    if title:
+        print()
+        box_header(title, width=min(cols - 4, 68))
+        print()
+
+
 def print_banner(client: ServerClient, status_info: Optional[Dict[str, Any]] = None):
-    print()
-    print_google_maps_logo("                  ")
-    print(f"               {C_DIM}« Native Chromium • Zero-VM Architecture »{C_RESET}")
-    print(f"                       {C_BOLD}{C_GREEN}AutoBotix CLI {CLI_VERSION}{C_RESET}")
-    print()
-
-    user_label = client.username or "admin"
-    lines = [
-        f"{C_DIM}Host Server:{C_RESET} {C_GREEN}{client.base_url}{C_RESET}   {C_DIM}User:{C_RESET} {C_CYAN}{user_label}{C_RESET}   {C_DIM}Versi:{C_RESET} {C_YELLOW}{CLI_VERSION}{C_RESET}"
-    ]
-    if status_info:
-        b_cnt = status_info.get("businesses_count", 0)
-        a_cnt = status_info.get("accounts_count", 0)
-        c_cnt = status_info.get("active_cookies", 0)
-        r_cnt = status_info.get("reviewed_count", 0)
-        p_cnt = status_info.get("pending_count", 0)
-        disps = " ".join(status_info.get("displays", []))
-        lines.append(f"Target: {C_WHITE}{b_cnt}{C_RESET} │ Akun: {C_WHITE}{a_cnt}{C_RESET} │ Cookie: {C_WHITE}{c_cnt}{C_RESET} │ Ulasan: {C_WHITE}{r_cnt}{C_RESET} │ Antrean: {C_WHITE}{p_cnt}{C_RESET}")
-        lines.append(f"{C_DIM}Display Virtual Xvfb:{C_RESET} {C_CYAN}{disps}{C_RESET}")
-
-    print_box(lines, width=68)
+    print_header_screen(client=client, status_info=status_info)
 
 
 def _do_login(client: ServerClient, default_user: str = "admin") -> bool:
     """Handle login input and verification."""
     import getpass
 
-    print()
-    print(f" {C_BOLD}{C_CYAN}─── MASUK (LOGIN) ─────────────────────────────────────────────────────{C_RESET}")
+    print_header_screen(client, title="MASUK (LOGIN)")
     attempts = 0
     max_attempts = 4
     while attempts < max_attempts:
@@ -571,8 +691,7 @@ def _do_register(client: ServerClient) -> bool:
     """Handle new user registration and auto-login."""
     import getpass
 
-    print()
-    print(f" {C_BOLD}{C_CYAN}─── DAFTAR AKUN BARU (REGISTER) ───────────────────────────────────────{C_RESET}")
+    print_header_screen(client, title="DAFTAR AKUN BARU (REGISTER)")
     try:
         username = input(f"\n {C_CYAN}Username Baru (min 3 huruf/angka): {C_RESET}").strip()
         if not username:
@@ -670,11 +789,11 @@ def print_version_history(client: ServerClient):
         },
     ]
 
-    print()
-    box_header(f"{C_BOLD}{C_CYAN}RIWAYAT VERSI & CHANGELOG AUTOBOTIX CLI{C_RESET}")
-    print()
+    print_header_screen(client, title="RIWAYAT VERSI & CHANGELOG")
+    cols = get_terminal_width()
+    div_w = min(cols - 2, 78)
     print(f" {C_BOLD}{'VERSI':<9} {'TANGGAL':<12} {'KETERANGAN & FITUR BARU'}{C_RESET}")
-    print(" " + "─" * 78)
+    print(" " + "─" * div_w)
 
     for v in versions:
         v_num = v.get("version", "")
@@ -826,12 +945,7 @@ def check_and_apply_update(client: ServerClient) -> bool:
 def prompt_auth(client: ServerClient, default_user: str = "admin") -> bool:
     """Display Authentication Menu (Login / Register / Exit) before task menu."""
     while True:
-        os.system("cls" if os.name == "nt" else "clear")
-        print()
-        print_google_maps_logo("                  ")
-        print(f"               {C_DIM}« Native Chromium • Zero-VM Architecture »{C_RESET}")
-        print(f"                       {C_BOLD}{C_GREEN}AutoBotix CLI {CLI_VERSION}{C_RESET}")
-        print()
+        print_header_screen(client, title="AUTENTIKASI PENGGUNA")
         print(f" {C_DIM}Host Server Target : {C_GREEN}{client.base_url}{C_RESET}")
         print(f" {C_DIM}Versi Aplikasi     : {C_CYAN}{CLI_VERSION}{C_RESET} {C_GREEN}(Auto-Update Aktif ●){C_RESET}")
         print()
@@ -959,6 +1073,7 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
             pass
 
     while True:
+        print_header_screen(client, title="STATUS & KELOLA COOKIE GOOGLE")
         print_cookies_table(cookies)
 
         if not client.is_admin:
@@ -984,7 +1099,7 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
             break
 
         elif c_opt == "1":
-            print(f"\n {C_BOLD}{C_CYAN}─── TAMBAH COOKIE BARU ───────────────────────────────────────────────{C_RESET}")
+            print_header_screen(client, title="TAMBAH COOKIE SESI BARU")
             print(f" {C_DIM}Tips: Anda dapat memasukkan file path (.json) atau paste JSON cookie langsung.{C_RESET}")
             source_in = input(f" {C_GREEN}Jalur File .json (kosongkan jika ingin paste langsung): {C_RESET}").strip()
 
@@ -1043,7 +1158,7 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
                 time.sleep(2)
 
         elif c_opt == "2":
-            print(f"\n {C_BOLD}{C_CYAN}─── HAPUS COOKIE ──────────────────────────────────────────────────────{C_RESET}")
+            print_header_screen(client, title="HAPUS COOKIE SESI")
             del_in = input(f" {C_GREEN}Masukkan ID Cookie (angka) ATAU Email yang ingin dihapus: {C_RESET}").strip()
             if not del_in:
                 print(f" {C_YELLOW}Batal menghapus cookie.{C_RESET}")
@@ -1071,7 +1186,7 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
                     time.sleep(2)
 
         elif c_opt == "3":
-            print(f"\n {C_BOLD}{C_CYAN}─── CEK NAMA AKUN & VALIDITAS SESI GOOGLE ─────────────────────────────{C_RESET}")
+            print_header_screen(client, title="PERIKSA STATUS & NAMA PROFIL")
             spin = Spinner("Memverifikasi sesi & memeriksa nama profil akun ke Google...")
             spin.start()
             try:
@@ -1091,7 +1206,7 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
                 time.sleep(2)
 
         elif c_opt == "4":
-            print(f"\n {C_BOLD}{C_CYAN}─── UJI VALIDITAS COOKIE ──────────────────────────────────────────────{C_RESET}")
+            print_header_screen(client, title="UJI VALIDITAS SESI GOOGLE")
             test_in = input(f" {C_GREEN}Masukkan ID Cookie yang ingin diuji: {C_RESET}").strip()
             if not test_in.isdigit():
                 print(f" {C_RED}✖ ID harus berupa angka.{C_RESET}")
@@ -1157,10 +1272,8 @@ def print_queue_table(queue_items: List[Dict[str, Any]], title: str = "DAFTAR AN
 
 def handle_queue_menu(client: ServerClient, status_info: Dict[str, Any]):
     """Interactive queue management and inspection."""
-    os.system("cls" if os.name == "nt" else "clear")
-    print_banner(client, status_info)
-
     while True:
+        print_header_screen(client, title="DAFTAR ANTREAN ULASAN", status_info=status_info)
         spin = Spinner("Memuat daftar antrean ulasan...")
         spin.start()
         try:
@@ -1194,6 +1307,7 @@ def handle_queue_menu(client: ServerClient, status_info: Dict[str, Any]):
             print_banner(client, status_info)
             continue
         elif q_opt == "2":
+            print_header_screen(client, title="FILTER ANTREAN BISNIS")
             businesses = status_info.get("businesses", [])
             print_businesses(businesses)
             bid_in = input(f" {C_GREEN}Masukkan ID Bisnis target: {C_RESET}").strip()
@@ -1209,9 +1323,8 @@ def handle_queue_menu(client: ServerClient, status_info: Dict[str, Any]):
                     spin.stop()
                     print(f" {C_RED}✖ Gagal: {exc}{C_RESET}")
             input(f" {C_DIM}Tekan Enter untuk melanjutkan...{C_RESET}")
-            os.system("cls" if os.name == "nt" else "clear")
-            print_banner(client, status_info)
         elif q_opt == "3":
+            print_header_screen(client, title="RESET ANTREAN BISNIS")
             businesses = status_info.get("businesses", [])
             print_businesses(businesses)
             bid_in = input(f" {C_GREEN}Masukkan ID Bisnis yang antreannya ingin direset: {C_RESET}").strip()
@@ -1227,16 +1340,13 @@ def handle_queue_menu(client: ServerClient, status_info: Dict[str, Any]):
                         spin.stop()
                         print(f" {C_RED}✖ Gagal: {exc}{C_RESET}")
             input(f" {C_DIM}Tekan Enter untuk melanjutkan...{C_RESET}")
-            os.system("cls" if os.name == "nt" else "clear")
-            print_banner(client, status_info)
 
 
 # ── Remove Review Handler ─────────────────────────────────────────────────────
 
 def handle_remove_review_menu(client: ServerClient, status_info: Dict[str, Any]):
     """Interactive handler for removing reviews (database deletion or live Google Maps deletion)."""
-    os.system("cls" if os.name == "nt" else "clear")
-    print_banner(client, status_info)
+    print_header_screen(client, title="HAPUS ULASAN GOOGLE MAPS", status_info=status_info)
 
     businesses = status_info.get("businesses", [])
     if not businesses:
@@ -1283,8 +1393,7 @@ def handle_remove_review_menu(client: ServerClient, status_info: Dict[str, Any])
     reviewed_count = sum(1 for r in reviews if r.get("status") in ("reviewed", "posted"))
     pending_count = sum(1 for r in reviews if r.get("status") == "pending")
 
-    os.system("cls" if os.name == "nt" else "clear")
-    print_banner(client, status_info)
+    print_header_screen(client, title=f"HAPUS ULASAN - {biz_name[:25]}", status_info=status_info)
 
     sub_lines = [
         f" Target : {C_BOLD}{biz_name}{C_RESET} (ID: {bid})",
@@ -1602,9 +1711,15 @@ def run_delete_maps_stream(
 
             sp_idx += 1
             sp_char = SPINNER_FRAMES[sp_idx % len(SPINNER_FRAMES)]
-            st_badge = f"{C_RED}MEMBERSIHKAN ULASAN MAPS{C_RESET}" if status == "deleting" or not clean_finished else f"{C_GREEN}SELESAI{C_RESET}"
-            metrics_del = f"│ {C_GREEN}Dihapus: {del_berhasil}{C_RESET} │ {C_YELLOW}Tidak Ada: {del_notfound}{C_RESET} │ {C_RED}Gagal: {del_gagal}{C_RESET}"
-            sys.stdout.write(f"\r {C_CYAN}│   {sp_char}{C_RESET} {C_WHITE}Status: {st_badge} │ {C_DIM}Waktu:{C_RESET} {C_GREEN}{time_str}{C_RESET} {metrics_del} │ {C_DIM}Ctrl+C untuk kembali{C_RESET}\033[K")
+            cols = get_terminal_width()
+            if cols >= 85:
+                st_badge = f"{C_RED}MEMBERSIHKAN ULASAN MAPS{C_RESET}" if status == "deleting" or not clean_finished else f"{C_GREEN}SELESAI{C_RESET}"
+                metrics_del = f"│ {C_GREEN}Dihapus: {del_berhasil}{C_RESET} │ {C_YELLOW}Tidak Ada: {del_notfound}{C_RESET} │ {C_RED}Gagal: {del_gagal}{C_RESET}"
+                line_del = f"\r {C_CYAN}│   {sp_char}{C_RESET} {C_WHITE}Status: {st_badge} │ {C_DIM}Waktu:{C_RESET} {C_GREEN}{time_str}{C_RESET} {metrics_del} │ {C_DIM}Ctrl+C{C_RESET}\033[K"
+            else:
+                st_badge = f"{C_RED}HAPUS{C_RESET}" if status == "deleting" or not clean_finished else f"{C_GREEN}OK{C_RESET}"
+                line_del = f"\r {C_CYAN}│ {sp_char}{C_RESET} {st_badge} {C_GREEN}{time_str}{C_RESET} │ {C_GREEN}H:{del_berhasil}{C_RESET} {C_YELLOW}N:{del_notfound}{C_RESET} {C_RED}G:{del_gagal}{C_RESET}\033[K"
+            sys.stdout.write(truncate_ansi(line_del, cols - 1))
             sys.stdout.flush()
             time.sleep(0.09)
 
@@ -1797,15 +1912,20 @@ def run_task_stream(
             # Animate spinner on current bottom line (connected to tree trunk) with live metrics
             sp_idx += 1
             sp_char = SPINNER_FRAMES[sp_idx % len(SPINNER_FRAMES)]
+            cols = get_terminal_width()
             if status in ("running", "reviewing"):
-                st_badge = f"{C_GREEN}SEDANG MEMPROSES{C_RESET}"
+                st_badge = f"{C_GREEN}PROSES{C_RESET}" if cols < 85 else f"{C_GREEN}SEDANG MEMPROSES{C_RESET}"
             elif status == "queued":
-                st_badge = f"{C_YELLOW}JEDA ANTREAN{C_RESET}"
+                st_badge = f"{C_YELLOW}ANTREAN{C_RESET}" if cols < 85 else f"{C_YELLOW}JEDA ANTREAN{C_RESET}"
             else:
-                st_badge = f"{C_CYAN}{status.upper()}{C_RESET}"
+                st_badge = f"{C_CYAN}{status.upper()[:8]}{C_RESET}"
 
-            metrics_bar = f"│ {C_GREEN}Berhasil: {total_berhasil}{C_RESET} │ {C_YELLOW}Skip: {total_skip}{C_RESET} │ {C_RED}Gagal: {total_gagal}{C_RESET}"
-            sys.stdout.write(f"\r {C_CYAN}│   {sp_char}{C_RESET} {C_WHITE}Status: {st_badge} │ {C_DIM}Waktu:{C_RESET} {C_GREEN}{time_str}{C_RESET} {metrics_bar} │ {C_DIM}Ctrl+C untuk kembali{C_RESET}\033[K")
+            if cols >= 85:
+                metrics_bar = f"│ {C_GREEN}Berhasil: {total_berhasil}{C_RESET} │ {C_YELLOW}Skip: {total_skip}{C_RESET} │ {C_RED}Gagal: {total_gagal}{C_RESET}"
+                task_line = f"\r {C_CYAN}│   {sp_char}{C_RESET} {C_WHITE}Status: {st_badge} │ {C_DIM}Waktu:{C_RESET} {C_GREEN}{time_str}{C_RESET} {metrics_bar} │ {C_DIM}Ctrl+C{C_RESET}\033[K"
+            else:
+                task_line = f"\r {C_CYAN}│ {sp_char}{C_RESET} {st_badge} {C_GREEN}{time_str}{C_RESET} │ {C_GREEN}B:{total_berhasil}{C_RESET} {C_YELLOW}S:{total_skip}{C_RESET} {C_RED}G:{total_gagal}{C_RESET}\033[K"
+            sys.stdout.write(truncate_ansi(task_line, cols - 1))
             sys.stdout.flush()
             time.sleep(0.09)
 
@@ -1892,7 +2012,7 @@ def interactive_menu(client: ServerClient):
             break
 
         elif choice == "1":
-            print()
+            print_header_screen(client, title="JALANKAN TASK ULASAN GOOGLE MAPS")
             print(f" {C_CYAN}┌── [1/3] MEMERIKSA KESIAPAN AKUN GOOGLE{C_RESET}")
             print(f" {C_CYAN}│{C_RESET}   {C_DIM}Memvalidasi status sesi & profil akun dari database server...{C_RESET}")
             print(f" {C_CYAN}│{C_RESET}")
@@ -2002,11 +2122,12 @@ def interactive_menu(client: ServerClient):
             input(f"\n {C_DIM}Tekan Enter untuk kembali ke menu...{C_RESET}")
 
         elif choice == "2":
+            print_header_screen(client, title="DAFTAR TARGET GOOGLE MAPS")
             print_businesses(status_info.get("businesses", []))
             input(f" {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
 
         elif choice == "3":
-            print(f"\n {C_BOLD}{C_CYAN}=== TAMBAH TARGET BISNIS BARU ==={C_RESET}")
+            print_header_screen(client, title="TAMBAH TARGET BISNIS BARU")
             name = input(f" {C_GREEN}Nama Bisnis / Tempat: {C_RESET}").strip()
             url = input(f" {C_GREEN}URL Google Maps: {C_RESET}").strip()
             cat = input(f" {C_GREEN}Kategori Bisnis (default General): {C_RESET}").strip() or "General"
@@ -2027,6 +2148,7 @@ def interactive_menu(client: ServerClient):
             handle_cookie_menu(client, status_info)
 
         elif choice == "5":
+            print_header_screen(client, title="PANTAU LIVE PROCESS LOGS")
             businesses = status_info.get("businesses", [])
             print_businesses(businesses)
             bid_in = input(f" {C_GREEN}Masukkan ID Bisnis yang ingin dipantau log-nya: {C_RESET}").strip()
@@ -2050,6 +2172,7 @@ def interactive_menu(client: ServerClient):
             handle_queue_menu(client, status_info)
 
         elif choice == "7":
+            print_header_screen(client, title="EMERGENCY STOP WORKER")
             businesses = status_info.get("businesses", [])
             print_businesses(businesses)
             bid_in = input(f" {C_GREEN}Masukkan ID Bisnis yang ingin dihentikan task-nya: {C_RESET}").strip()
@@ -2065,6 +2188,7 @@ def interactive_menu(client: ServerClient):
             input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
 
         elif choice == "8":
+            print_header_screen(client, title="BERSIHKAN LOG & ANTREAN")
             businesses = status_info.get("businesses", [])
             print_businesses(businesses)
             bid_in = input(f" {C_GREEN}Masukkan ID Bisnis yang ingin dibersihkan log-nya: {C_RESET}").strip()

@@ -452,10 +452,17 @@ CLI_VERSIONS = [
         "title": "Strict Queue Lock & Metrics Summary",
         "description": "Proteksi Mutex Antrean Anti-Bentrok per target, metrik Total Berhasil/Skip/Gagal/Error, dan perbaikan klik dialog Maps.",
     },
+    {
+        "version": "v1.0.4",
+        "version_code": 104,
+        "release_date": "2026-10-28",
+        "title": "Termux Mobile Fix & Clean Clear-Screen Navigation",
+        "description": "Perbaikan animasi spinner Termux Android (anti-wrapping & mobile responsive), auto clear-screen, dan logo Google Maps di setiap perpindahan menu.",
+    },
 ]
 
-LATEST_CLI_VERSION = "v1.0.3"
-LATEST_CLI_VERSION_CODE = 103
+LATEST_CLI_VERSION = "v1.0.4"
+LATEST_CLI_VERSION_CODE = 104
 
 
 @app.route("/api/cli/version", methods=["GET"])
