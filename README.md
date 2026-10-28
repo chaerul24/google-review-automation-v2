@@ -90,7 +90,26 @@ python cli.py
 
 ---
 
-## Windows Client Usage
+## Client Usage (Windows, Android Termux, Linux)
+
+### A. Android (Termux) & Linux
+Kontrol dan monitor jalannya bot langsung dari HP Android melalui **Termux**:
+
+1. Buka aplikasi Termux, install dependensi dasar (hanya Python & cURL):
+   ```bash
+   pkg update && pkg install python curl -y
+   ```
+2. Unduh launcher dan jalankan:
+   ```bash
+   curl -O https://autobotix.my.id/download/bot.sh && bash bot.sh
+   ```
+   *(Atau gunakan IP lokal jika satu jaringan WiFi: `curl -O http://<SERVER_IP>:5000/download/bot.sh && bash bot.sh`)*
+3. Masukkan Username dan Password akun AutoBotix Anda.
+4. Pilih menu `[1] 🚀 Jalankan Task` untuk menjalankan atau memantau ulasan secara live!
+
+---
+
+### B. Windows Client Usage
 
 Run review tasks directly from any physical Windows PC on the local network:
 

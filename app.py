@@ -106,6 +106,14 @@ def download_bot_bat():
     return send_from_directory(cli_dir, "bot.bat", as_attachment=True)
 
 
+@app.route("/download/bot.sh")
+def download_bot_sh():
+    """Download Linux / macOS / Termux shell launcher."""
+    cli_dir = os.path.dirname(os.path.abspath(__file__))
+    return send_from_directory(cli_dir, "bot.sh", as_attachment=True)
+
+
+
 @app.route("/promo/<path:filename>")
 def serve_promo_video(filename):
     """Serve or download promotional video files."""
