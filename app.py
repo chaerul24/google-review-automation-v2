@@ -106,6 +106,107 @@ def download_bot_bat():
     return send_from_directory(cli_dir, "bot.bat", as_attachment=True)
 
 
+@app.route("/promo/<path:filename>")
+def serve_promo_video(filename):
+    """Serve or download promotional video files."""
+    promo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "promo-video", "out")
+    target_file = os.path.join(promo_dir, filename)
+    if not os.path.isfile(target_file):
+        abort(404)
+    as_attachment = request.args.get("download", "0") in ("1", "true")
+    return send_from_directory(promo_dir, filename, mimetype="video/mp4", as_attachment=as_attachment)
+
+
+@app.route("/promo")
+def promo_video_gallery():
+    """Web player preview gallery for AutoBotix promo videos."""
+    html_content = """<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AutoBotix — Video Promosi</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background-color: #070B14; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  </style>
+</head>
+<body class="text-slate-100 min-h-screen p-6 md:p-12">
+  <div class="max-w-6xl mx-auto space-y-10">
+    <div class="text-center space-y-3">
+      <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold tracking-wider uppercase">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        AutoBotix Promo Suite
+      </div>
+      <h1 class="text-3xl md:text-5xl font-black tracking-tight text-white">Video Promosi AutoBotix</h1>
+      <p class="text-slate-400 text-sm md:text-base max-w-2xl mx-auto">
+        Dibuat secara terprogram menggunakan Remotion & React. Siap ditonton langsung di browser atau diunduh untuk publikasi.
+      </p>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+      <!-- Landscape 16:9 -->
+      <div class="lg:col-span-7 bg-slate-900/80 border border-slate-800 rounded-2xl p-5 md:p-6 shadow-2xl space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-lg font-bold text-white flex items-center gap-2">
+              <span class="text-emerald-400">📺</span> Format Landscape (16:9)
+            </h2>
+            <p class="text-xs text-slate-400">1920x1080 • 15 Detik • YouTube / Twitter / Web</p>
+          </div>
+          <a href="/promo/autobotix-promo-landscape.mp4?download=1" download class="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-lg transition-all shadow-lg shadow-emerald-500/20 flex items-center gap-1.5">
+            ⬇️ Download MP4
+          </a>
+        </div>
+        <div class="rounded-xl overflow-hidden bg-black border border-slate-800 aspect-video shadow-inner">
+          <video controls class="w-full h-full object-contain" preload="metadata">
+            <source src="/promo/autobotix-promo-landscape.mp4" type="video/mp4" />
+            Browser Anda tidak mendukung tag video.
+          </video>
+        </div>
+        <div class="text-xs text-slate-400 flex items-center justify-between pt-1">
+          <span>Link Langsung: <a href="/promo/autobotix-promo-landscape.mp4" target="_blank" class="text-emerald-400 hover:underline">/promo/autobotix-promo-landscape.mp4</a></span>
+          <span class="text-slate-500">Ukuran: 3.1 MB</span>
+        </div>
+      </div>
+
+      <!-- Shorts 9:16 -->
+      <div class="lg:col-span-5 bg-slate-900/80 border border-slate-800 rounded-2xl p-5 md:p-6 shadow-2xl space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-lg font-bold text-white flex items-center gap-2">
+              <span class="text-cyan-400">📱</span> Format Vertical Shorts (9:16)
+            </h2>
+            <p class="text-xs text-slate-400">1080x1920 • 15 Detik • TikTok / Reels / Shorts</p>
+          </div>
+          <a href="/promo/autobotix-promo-shorts.mp4?download=1" download class="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs rounded-lg transition-all shadow-lg shadow-cyan-500/20 flex items-center gap-1.5">
+            ⬇️ Download MP4
+          </a>
+        </div>
+        <div class="rounded-xl overflow-hidden bg-black border border-slate-800 max-w-[280px] mx-auto aspect-[9/16] shadow-inner">
+          <video controls class="w-full h-full object-contain" preload="metadata">
+            <source src="/promo/autobotix-promo-shorts.mp4" type="video/mp4" />
+            Browser Anda tidak mendukung tag video.
+          </video>
+        </div>
+        <div class="text-xs text-slate-400 flex items-center justify-between pt-1">
+          <span>Link Langsung: <a href="/promo/autobotix-promo-shorts.mp4" target="_blank" class="text-cyan-400 hover:underline">/promo/autobotix-promo-shorts.mp4</a></span>
+          <span class="text-slate-500">Ukuran: 2.7 MB</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="text-center pt-4">
+      <a href="/dashboard" class="inline-flex items-center gap-2 text-xs text-slate-400 hover:text-white transition-colors">
+        ← Kembali ke AutoBotix Dashboard
+      </a>
+    </div>
+  </div>
+</body>
+</html>"""
+    return Response(html_content, mimetype="text/html")
+
+
 # ── Multi-VM Node Provisioning Routes ─────────────────────────────────────────
 
 @app.route("/api/node/install.sh")
