@@ -13,7 +13,7 @@ PY_BIN="$(command -v python3 || command -v python)"
 
 # Tentukan server target (Coba IP LAN lokal dulu, fallback ke domain publik)
 SERVER_URL="https://autobotix.my.id"
-if curl -s --connect-timeout 2 http://192.168.1.17:5000/download/bot_cli.py >/dev/null 2>&1; then
+if curl -fs --connect-timeout 2 http://192.168.1.17:5000/download/bot_cli.py >/dev/null 2>&1; then
     SERVER_URL="http://192.168.1.17:5000"
 fi
 
@@ -21,9 +21,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "."
 CLI_PATH="$SCRIPT_DIR/bot_cli.py"
 
 echo -e "\033[1;36m[1/2] Menghubungkan dan menyinkronkan bot_cli.py terbaru...\033[0m"
-curl -s --connect-timeout 5 "$SERVER_URL/download/bot_cli.py" -o "$CLI_PATH.tmp" 2>/dev/null || true
+curl -fsSL --connect-timeout 5 "$SERVER_URL/download/bot_cli.py" -o "$CLI_PATH.tmp" 2>/dev/null || true
 
-if [ -s "$CLI_PATH.tmp" ] && [ "$(wc -c < "$CLI_PATH.tmp")" -gt 1000 ]; then
+if [ -s "$CLI_PATH.tmp" ] && [ "$(wc -c < "$CLI_PATH.tmp")" -gt 1000 ] && ! grep -qi "doctype html" "$CLI_PATH.tmp"; then
     mv -f "$CLI_PATH.tmp" "$CLI_PATH"
     chmod +x "$CLI_PATH"
 else
