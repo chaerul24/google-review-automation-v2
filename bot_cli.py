@@ -1670,6 +1670,13 @@ def handle_remove_review_menu(client: ServerClient, status_info: Dict[str, Any])
 
 def format_task_log_line(ts: str, lvl: str, msg: str, email: str = "", account_name: str = "") -> str:
     """Format single log entry into a unified CLI tree branch with vertical trunk | and -> process indicator."""
+    import html as _html_mod
+    # Sanitize account_name: decode HTML entities (&amp;#10; &#10; etc), strip newlines/tabs
+    if account_name:
+        account_name = _html_mod.unescape(account_name)
+        account_name = re.sub(r'[\n\r\t&#;0-9]+', ' ', account_name)
+        account_name = re.sub(r'\s{2,}', ' ', account_name).strip()
+
     m_bracket = re.match(r"^\[([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)\]\s*(.*)", msg)
     if m_bracket:
         detected_email = m_bracket.group(1)

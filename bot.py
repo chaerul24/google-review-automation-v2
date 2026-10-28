@@ -322,6 +322,25 @@ def setup_authenticated_session(sb, email, target_url="https://www.google.com/ma
     return True, status, reason
 
 
+def _extract_cid_from_maps_url(maps_url: str) -> int | None:
+    """Extract Google Maps CID (Content ID) from a maps URL for direct review navigation."""
+    # Try ftid=0xAAAA:0xBBBB pattern
+    m = re.search(r'ftid=(0x[0-9a-fA-F]+):(0x[0-9a-fA-F]+)', maps_url)
+    if m:
+        try:
+            return int(m.group(2), 16)
+        except Exception:
+            pass
+    # Try !1s0xAAAA:0xBBBB pattern inside data=
+    m2 = re.search(r'!1s(0x[0-9a-fA-F]+):(0x[0-9a-fA-F]+)', maps_url)
+    if m2:
+        try:
+            return int(m2.group(2), 16)
+        except Exception:
+            pass
+    return None
+
+
 def post_review(
     email,
     password,
@@ -540,14 +559,17 @@ def post_review(
             db.update_review_status(email_id, "reviewed", existing_snippet or "[Ulasan sudah terbit di Google Maps]", star_rating)
             return "skipped"
 
-        # Try to click "Write a review" directly or open Reviews tab first
+        # ── Step: Open Review Form ──────────────────────────────────────────────
+        # Strategy 1: Try clicking "Write a review" button directly on Overview
         write_clicked = False
         for wr_sel in [
             'button[aria-label="Write a review"]',
             'button[aria-label*="Write a review"]',
             'button[aria-label*="Tulis ulasan"]',
+            'button[data-value*="Write a review"]',
+            'button[jsaction*="reviewAction"]',
             'button:contains("Write a review")',
-            'button:contains("Tulis ulasan")'
+            'button:contains("Tulis ulasan")',
         ]:
             try:
                 if sb.is_element_visible(wr_sel):
@@ -558,12 +580,13 @@ def post_review(
             except Exception:
                 pass
 
+        # Strategy 2: Click Reviews tab first, then look for Write a review button
         if not write_clicked:
             for rev_tab in [
                 'button[aria-label*="Reviews"]',
                 'button[aria-label*="Ulasan"]',
                 'button[role="tab"][data-tab-index="1"]',
-                'div[role="tablist"] button:nth-child(2)'
+                'div[role="tablist"] button:nth-child(2)',
             ]:
                 try:
                     if sb.is_element_visible(rev_tab):
@@ -578,23 +601,106 @@ def post_review(
                 'button[aria-label="Write a review"]',
                 'button[aria-label*="Write a review"]',
                 'button[aria-label*="Tulis ulasan"]',
+                'button[data-value*="Write a review"]',
                 'button:contains("Write a review")',
-                'button:contains("Tulis ulasan")'
+                'button:contains("Tulis ulasan")',
             ]:
                 try:
                     sb.click(wr_sel, timeout=15)
                     write_clicked = True
-                    log.info("Clicked write review button via %s", wr_sel)
+                    log.info("Clicked write review button (post-tab) via %s", wr_sel)
                     break
                 except Exception:
                     pass
 
-        sb.sleep(random.uniform(4, 8))
+        # Strategy 3: Click star rating button on overview panel (newer Maps UI)
+        if not write_clicked:
+            for star_sel in [
+                f'button[aria-label*="{star_rating} star"]',
+                f'button[aria-label*="{star_rating} bintang"]',
+                'g-review-stars button',
+                'button[jsaction*="rate"]',
+                'div[data-value="rate"] button',
+            ]:
+                try:
+                    if sb.is_element_visible(star_sel):
+                        sb.click(star_sel)
+                        write_clicked = True
+                        log.info("Clicked star rating button via %s", star_sel)
+                        break
+                except Exception:
+                    pass
 
-        # --- Confirm the review iframe is open before generating text ---
-        sb.wait_for_element_visible(iframe_sel, timeout=30)
+        # Strategy 4: Navigate directly to review URL using CID from maps URL
+        if not write_clicked:
+            cid = _extract_cid_from_maps_url(maps_url)
+            if cid:
+                direct_review_url = f"https://www.google.com/maps?cid={cid}&hl=en&action=write_review"
+                db.add_process_log(business_id, f"[{email}] Mencoba URL langsung form review (CID: {cid})...", email_id)
+                sb.get(direct_review_url)
+                sb.sleep(random.uniform(5, 8))
+                write_clicked = True  # Assume iframe will appear
+            else:
+                # Strategy 5: Try JS click on any visible star rating element
+                try:
+                    clicked_via_js = sb.execute_script("""
+                        var buttons = document.querySelectorAll('button[aria-label]');
+                        for (var b of buttons) {
+                            var lbl = b.getAttribute('aria-label') || '';
+                            if (lbl.toLowerCase().includes('write') || lbl.toLowerCase().includes('tulis') || lbl.toLowerCase().includes('review')) {
+                                b.click();
+                                return lbl;
+                            }
+                        }
+                        return null;
+                    """)
+                    if clicked_via_js:
+                        write_clicked = True
+                        log.info("Clicked write review via JS: %s", clicked_via_js)
+                except Exception:
+                    pass
+
+        db.add_process_log(business_id, f"[{email}] Menunggu form ulasan Google Maps terbuka...", email_id)
+        sb.sleep(random.uniform(5, 9))
+
+        # --- Confirm the review iframe is open with extended timeout and retry ---
+        iframe_found = False
+        for _iframe_try in range(4):  # try up to 4 times with increasing wait
+            try:
+                sb.wait_for_element_visible(iframe_sel, timeout=20)
+                iframe_found = True
+                log.info("Review iframe found on attempt %d", _iframe_try + 1)
+                break
+            except Exception:
+                log.warning("iframe not found on attempt %d/4, retrying...", _iframe_try + 1)
+                # On retry: try clicking write review button again via JS
+                if _iframe_try < 3:
+                    try:
+                        js_clicked = sb.execute_script("""
+                            var candidates = document.querySelectorAll('button[aria-label]');
+                            for (var b of candidates) {
+                                var lbl = (b.getAttribute('aria-label') || '').toLowerCase();
+                                if (lbl.includes('write') || lbl.includes('tulis') || lbl.includes('review') || lbl.includes('ulasan')) {
+                                    b.click();
+                                    return b.getAttribute('aria-label');
+                                }
+                            }
+                            // try clicking g-review-stars
+                            var stars = document.querySelector('g-review-stars button, div[jsname] button[data-rating]');
+                            if (stars) { stars.click(); return 'star-button'; }
+                            return null;
+                        """)
+                        if js_clicked:
+                            log.info("JS retry click: %s", js_clicked)
+                    except Exception:
+                        pass
+                    sb.sleep(random.uniform(4, 6))
+
+        if not iframe_found:
+            raise RuntimeError(f"Form ulasan Google Maps (iframe) tidak ditemukan setelah beberapa percobaan. Kemungkinan: Maps URL tidak valid, akun belum login, atau Google sedang memblokir akses.")
+
         db.add_process_log(business_id, f"[{email}] Form review Google Maps sudah terbuka.", email_id)
-        sb.sleep(5)  # Brief wait before polling for the textarea
+        sb.sleep(4)  # Brief wait before polling for the textarea
 
         # Wait for the textarea inside the iframe to become available (up to 60s)
         review_area = None
@@ -611,7 +717,13 @@ def post_review(
         time.sleep(3)
 
         # Select the star rating before creating the local review text
-        sb.nested_click(iframe_sel, f"div[data-rating='{star_rating}'][role='radio']")
+        try:
+            sb.nested_click(iframe_sel, f"div[data-rating='{star_rating}'][role='radio']")
+        except Exception:
+            try:
+                sb.nested_click(iframe_sel, f"span[data-rating='{star_rating}'], input[value='{star_rating}']")
+            except Exception:
+                pass
         sb.sleep(random.uniform(2, 5))
 
         # Generate review text now that we know the write box is open and star is selected

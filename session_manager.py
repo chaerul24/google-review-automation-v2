@@ -1062,6 +1062,12 @@ def check_google_account_live(cookie_json_or_list: Any, fallback_email: str = ""
             if clean_uname:
                 account_name = clean_uname.title()
 
+        # Sanitize: strip HTML entities, newlines, tabs and extra whitespace
+        import html as _html_mod
+        account_name = _html_mod.unescape(account_name)
+        account_name = re.sub(r'[\n\r\t]+', ' ', account_name)
+        account_name = re.sub(r'\s{2,}', ' ', account_name).strip()
+
         # Check for refreshed Set-Cookie headers from Google to keep rotating tokens alive
         set_cookies = resp.headers.get_all("Set-Cookie") or []
         if set_cookies and email:
