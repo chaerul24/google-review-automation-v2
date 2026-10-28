@@ -371,7 +371,7 @@ def inject_security_context():
 
 @app.before_request
 def protect_csrf():
-    if request.path in {"/login", "/api/login", "/logout", "/api/logout", "/api/csrf-token", "/api/cli/login", "/api/cli/register"} or request.path.startswith("/api/vm/") or request.path.startswith("/download/"):
+    if request.path in {"/login", "/api/login", "/logout", "/api/logout", "/api/csrf-token", "/api/cli/login", "/api/cli/register"} or request.path.startswith("/api/vm/") or request.path.startswith("/download/") or request.path.startswith("/api/cli/"):
         return
     api_key = request.headers.get("X-API-Key")
     expected_key = os.environ.get("APP_PASSWORD", "")
@@ -459,10 +459,17 @@ CLI_VERSIONS = [
         "title": "Termux Mobile Fix & Clean Clear-Screen Navigation",
         "description": "Perbaikan animasi spinner Termux Android (anti-wrapping & mobile responsive), auto clear-screen, dan logo Google Maps di setiap perpindahan menu.",
     },
+    {
+        "version": "v1.0.5",
+        "version_code": 105,
+        "release_date": "2026-10-28",
+        "title": "Batch Cookie Live Validation & Google Anti-Expiry Engine",
+        "description": "Uji validitas cookie massal seluruh akun (live batch test), auto-extend cookie 2 tahun, auto-sync rotating token, dan background keepalive heartbeat anti-kadaluarsa.",
+    },
 ]
 
-LATEST_CLI_VERSION = "v1.0.4"
-LATEST_CLI_VERSION_CODE = 104
+LATEST_CLI_VERSION = "v1.0.5"
+LATEST_CLI_VERSION_CODE = 105
 
 
 @app.route("/api/cli/version", methods=["GET"])
@@ -682,6 +689,68 @@ def api_cli_check_cookie_names():
         "status": "ok",
         "checked": len(results),
         "active_count": active_count,
+        "results": results,
+    })
+
+
+@app.route("/api/cli/cookies/test-all", methods=["POST"])
+@login_required
+def api_cli_test_all_cookies():
+    """Batch test all account cookies live against Google and return complete status summary."""
+    with db.get_db() as conn:
+        cookies = conn.execute("SELECT id, email, cookie_json FROM cookies ORDER BY id ASC").fetchall()
+
+    results = []
+    active_count = 0
+    expired_count = 0
+
+    for row in cookies:
+        cid = row["id"]
+        email = row["email"]
+        c_json = row["cookie_json"]
+
+        live = session_manager.check_google_account_live(c_json, fallback_email=email)
+        acc_name = live.get("account_name") or ""
+        st_val = live.get("status") or "needs_login"
+        reason = live.get("reason") or ""
+        is_val = bool(live.get("is_valid", False))
+
+        if st_val == "active":
+            active_count += 1
+        else:
+            expired_count += 1
+
+        with db.get_db() as conn:
+            conn.execute(
+                """UPDATE cookies
+                   SET status = ?, account_name = (CASE WHEN ? != '' THEN ? ELSE account_name END),
+                       last_checked_at = CURRENT_TIMESTAMP, error_reason = ?
+                   WHERE id = ?""",
+                (st_val, acc_name, acc_name, reason, cid),
+            )
+            conn.execute(
+                """UPDATE emails
+                   SET account_name = (CASE WHEN ? != '' THEN ? ELSE account_name END),
+                       flagged = (CASE WHEN ? = 'active' THEN 0 ELSE flagged END),
+                       fail_count = (CASE WHEN ? = 'active' THEN 0 ELSE fail_count END)
+                   WHERE email = ?""",
+                (acc_name, acc_name, st_val, st_val, email),
+            )
+
+        results.append({
+            "id": cid,
+            "email": email,
+            "account_name": acc_name,
+            "status": st_val,
+            "is_valid": is_val,
+            "reason": reason,
+        })
+
+    return jsonify({
+        "status": "ok",
+        "total": len(results),
+        "active_count": active_count,
+        "expired_count": expired_count,
         "results": results,
     })
 
@@ -2728,25 +2797,44 @@ def api_vm_log(identifier="auto"):
 @app.route("/api/cookies/<int:cookie_id>/test", methods=["POST"])
 @login_required
 def test_cookie(cookie_id):
-    """Validate stored cookie against google.com and update session status."""
+    """Validate stored cookie against google.com live and update session status."""
     cookies = db.get_all_cookies()
     target = next((c for c in cookies if c["id"] == cookie_id), None)
     if not target:
         return jsonify({"status": "error", "message": "Cookie tidak ditemukan."}), 404
 
     email = target["email"]
-    sm = session_manager.SessionManager()
-    val = sm.validate_account_cookie(email, target_domain="google.com")
-    db.update_cookie_session_status(email, val.status.value, val.reason)
-    if val.is_valid:
-        with db.get_db() as conn:
-            conn.execute("UPDATE emails SET flagged = 0, fail_count = 0 WHERE email = ?", (email,))
+    live = session_manager.check_google_account_live(target["cookie_json"], fallback_email=email)
+    st_val = live.get("status") or "needs_login"
+    acc_name = live.get("account_name") or ""
+    reason = live.get("reason") or ""
+    is_valid = bool(live.get("is_valid", False))
+
+    with db.get_db() as conn:
+        conn.execute(
+            """UPDATE cookies
+               SET status = ?, account_name = (CASE WHEN ? != '' THEN ? ELSE account_name END),
+                   last_checked_at = CURRENT_TIMESTAMP, error_reason = ?
+               WHERE id = ?""",
+            (st_val, acc_name, acc_name, reason, cookie_id),
+        )
+        conn.execute(
+            """UPDATE emails
+               SET account_name = (CASE WHEN ? != '' THEN ? ELSE account_name END),
+                   flagged = (CASE WHEN ? = 'active' THEN 0 ELSE flagged END),
+                   fail_count = (CASE WHEN ? = 'active' THEN 0 ELSE fail_count END)
+               WHERE email = ?""",
+            (acc_name, acc_name, st_val, st_val, email),
+        )
+
+    val = session_manager.validate_cookie_payload(target["cookie_json"])
     return jsonify({
         "status": "ok",
         "email": email,
-        "is_valid": val.is_valid,
-        "session_status": val.status.value,
-        "reason": val.reason,
+        "account_name": acc_name,
+        "is_valid": is_valid,
+        "session_status": st_val,
+        "reason": reason,
         "count": val.cookie_count,
         "names": val.cookie_names[:8],
     })

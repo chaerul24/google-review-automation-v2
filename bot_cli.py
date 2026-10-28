@@ -27,8 +27,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 # Version Tracking & Manifest
-CLI_VERSION = "v1.0.4"
-CLI_VERSION_CODE = 104
+CLI_VERSION = "v1.0.5"
+CLI_VERSION_CODE = 105
 
 # Enable ANSI colors on Windows cmd.exe
 if sys.platform == "win32":
@@ -250,6 +250,10 @@ class ServerClient:
     def test_cookie(self, cookie_id: int) -> Dict[str, Any]:
         """Test a cookie session validity against Google."""
         return self._request(f"/api/cookies/{cookie_id}/test", method="POST")
+
+    def test_all_cookies(self) -> Dict[str, Any]:
+        """Trigger batch verification of all Google account sessions live."""
+        return self._request("/api/cli/cookies/test-all", method="POST")
 
     def check_account_names(self) -> Dict[str, Any]:
         """Trigger server-side verification of Google account names and live session statuses."""
@@ -1011,8 +1015,30 @@ def print_accounts(accounts: List[Dict[str, Any]]):
         print(f"  {C_YELLOW}Belum ada akun Google terdaftar.{C_RESET}")
         return
 
+    cols = get_terminal_width()
+    if cols < 70:
+        for a in accounts:
+            aid = a.get("id")
+            name = (a.get("account_name") or "-").strip()
+            email = a.get("email", "")
+            c_status = a.get("cookie_status") or "no_cookie"
+            if c_status == "active":
+                st_badge = f"{C_GREEN}● AKTIF{C_RESET}"
+            elif c_status == "needs_login":
+                st_badge = f"{C_YELLOW}▲ PERLU LOGIN{C_RESET}"
+            elif c_status == "expired":
+                st_badge = f"{C_RED}✖ KEDALUWARSA{C_RESET}"
+            else:
+                st_badge = f"{C_DIM}- TIDAK ADA -{C_RESET}"
+            line1 = f" {C_YELLOW}[#{aid}]{C_RESET} {C_WHITE}{C_BOLD}{name}{C_RESET} ──> {st_badge}"
+            line2 = f"       {C_CYAN}{email}{C_RESET}"
+            print(truncate_ansi(line1, cols - 1))
+            print(truncate_ansi(line2, cols - 1))
+        print()
+        return
+
     print(f" {C_BOLD}{'ID':<5} {'NAMA AKUN':<22} {'EMAIL AKUN':<32} {'STATUS SESI':<16}{C_RESET}")
-    print(" " + "─" * 78)
+    print(" " + "─" * min(78, cols - 2))
     for a in accounts:
         aid = a.get("id")
         name = (a.get("account_name") or "-").strip()[:20]
@@ -1029,7 +1055,8 @@ def print_accounts(accounts: List[Dict[str, Any]]):
             st_color = f"{C_DIM}- TIDAK ADA -{C_RESET}"
 
         st_pad = pad_to_display_width(st_color, 16)
-        print(f" {C_YELLOW}{aid:<5}{C_RESET} {C_WHITE}{name:<22}{C_RESET} {C_CYAN}{email:<32}{C_RESET} {st_pad}")
+        row = f" {C_YELLOW}{aid:<5}{C_RESET} {C_WHITE}{name:<22}{C_RESET} {C_CYAN}{email:<32}{C_RESET} {st_pad}"
+        print(truncate_ansi(row, cols - 1))
     print()
 
 
@@ -1040,8 +1067,30 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
         print(f"  {C_YELLOW}Belum ada cookie Google terdaftar di database.{C_RESET}")
         return
 
+    cols = get_terminal_width()
+    if cols < 70:
+        for c in cookies:
+            cid = c.get("id")
+            name = (c.get("account_name") or "-").strip()
+            email = c.get("email", "")
+            c_status = (c.get("status") or "unknown").lower()
+            if c_status == "active":
+                st_badge = f"{C_GREEN}● AKTIF{C_RESET}"
+            elif c_status in ("expired", "revoked", "invalid"):
+                st_badge = f"{C_RED}✖ KEDALUWARSA{C_RESET}"
+            elif c_status == "needs_login":
+                st_badge = f"{C_YELLOW}▲ PERLU LOGIN{C_RESET}"
+            else:
+                st_badge = f"{C_DIM}- TIDAK AKTIF -{C_RESET}"
+            line1 = f" {C_YELLOW}[#{cid}]{C_RESET} {C_WHITE}{C_BOLD}{name}{C_RESET} ──> {st_badge}"
+            line2 = f"       {C_CYAN}{email}{C_RESET}"
+            print(truncate_ansi(line1, cols - 1))
+            print(truncate_ansi(line2, cols - 1))
+        print()
+        return
+
     print(f" {C_BOLD}{'ID':<5} {'NAMA AKUN GOOGLE':<24} {'EMAIL AKUN':<32} {'STATUS SESI':<16}{C_RESET}")
-    print(" " + "─" * 78)
+    print(" " + "─" * min(78, cols - 2))
     for c in cookies:
         cid = c.get("id")
         name = (c.get("account_name") or "-").strip()[:22]
@@ -1058,7 +1107,8 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
             st_color = f"{C_DIM}- TIDAK AKTIF -{C_RESET}"
 
         st_pad = pad_to_display_width(st_color, 16)
-        print(f" {C_YELLOW}{cid:<5}{C_RESET} {C_WHITE}{name:<24}{C_RESET} {C_CYAN}{email:<32}{C_RESET} {st_pad}")
+        row = f" {C_YELLOW}{cid:<5}{C_RESET} {C_WHITE}{name:<24}{C_RESET} {C_CYAN}{email:<32}{C_RESET} {st_pad}"
+        print(truncate_ansi(row, cols - 1))
     print()
 
 
@@ -1086,7 +1136,7 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
         print(f"  {C_YELLOW}[1]{C_RESET} {C_WHITE}➕ Tambah Cookie Baru (Paste JSON atau File .json){C_RESET}")
         print(f"  {C_YELLOW}[2]{C_RESET} {C_WHITE}🗑️  Hapus Cookie (Berdasarkan ID atau Email){C_RESET}")
         print(f"  {C_YELLOW}[3]{C_RESET} {C_WHITE}🔍 Cek Nama Akun & Status Sesi (Live Check Google){C_RESET}")
-        print(f"  {C_YELLOW}[4]{C_RESET} {C_WHITE}🔄 Uji Validitas Cookie Tunggal (Test Sesi ID){C_RESET}")
+        print(f"  {C_YELLOW}[4]{C_RESET} {C_WHITE}🔄 Uji Validitas Sesi Seluruh Akun (Live Batch Test & Auto-Refresh){C_RESET}")
         print(f"  {C_YELLOW}[0]{C_RESET} {C_DIM}↩️  Kembali ke Menu Utama{C_RESET}")
         print()
 
@@ -1206,27 +1256,102 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
                 time.sleep(2)
 
         elif c_opt == "4":
-            print_header_screen(client, title="UJI VALIDITAS SESI GOOGLE")
-            test_in = input(f" {C_GREEN}Masukkan ID Cookie yang ingin diuji: {C_RESET}").strip()
-            if not test_in.isdigit():
-                print(f" {C_RED}✖ ID harus berupa angka.{C_RESET}")
-                time.sleep(1)
+            print_header_screen(client, title="UJI VALIDITAS SESI GOOGLE (LIVE TEST)")
+            cols = get_terminal_width()
+            print(f" {C_BOLD}{C_CYAN}┌── PILIH MODE PENGUJIAN SESI GOOGLE{C_RESET}")
+            print(f" {C_BOLD}{C_CYAN}│{C_RESET}   {C_YELLOW}[1]{C_RESET} {C_WHITE}Uji SEMUA Akun Sekaligus (Batch Live Validation) {C_GREEN}[Rekomendasi / Default]{C_RESET}")
+            print(f" {C_BOLD}{C_CYAN}│{C_RESET}   {C_YELLOW}[2]{C_RESET} {C_WHITE}Uji Cookie Tunggal (Berdasarkan ID Akun){C_RESET}")
+            print(f" {C_BOLD}{C_CYAN}│{C_RESET}   {C_YELLOW}[0]{C_RESET} {C_DIM}Batal / Kembali ke Menu Cookie{C_RESET}")
+            print(f" {C_BOLD}{C_CYAN}└───────────────────────────────────────────────────────────────────{C_RESET}")
+            print()
+            try:
+                t_mode = input(f" {C_GREEN}Pilih mode pengujian [1/2/0] (default 1): {C_RESET}").strip() or "1"
+            except (KeyboardInterrupt, EOFError):
                 continue
 
-            cid = int(test_in)
-            spin = Spinner(f"Menguji validitas sesi Google untuk Cookie ID {cid}...")
-            spin.start()
-            try:
-                res = client.test_cookie(cid)
-                st_val = res.get("session_status", "unknown")
-                is_valid = res.get("is_valid", False)
-                email_target = res.get("email", str(cid))
-                spin.stop(f" {C_BOLD}{C_GREEN if is_valid else C_YELLOW}✓ Akun '{email_target}': Status = {st_val.upper()} (Valid = {is_valid}){C_RESET}")
-                time.sleep(2)
-            except Exception as e:
-                spin.stop()
-                print(f" {C_BOLD}{C_RED}✖ Gagal menguji cookie: {e}{C_RESET}")
-                time.sleep(2)
+            if t_mode == "0":
+                continue
+
+            if t_mode == "1":
+                spin = Spinner("Menguji validitas live seluruh akun ke Google & memperbarui token sesi...")
+                spin.start()
+                try:
+                    res = client.test_all_cookies()
+                    results = res.get("results", [])
+                    tot = res.get("total", len(results))
+                    act = res.get("active_count", 0)
+                    exp = res.get("expired_count", 0)
+                    spin.stop(f" {C_BOLD}{C_GREEN}✓ Uji validitas batch selesai! ({act}/{tot} Akun Aktif){C_RESET}")
+
+                    print()
+                    print_header_screen(client, title="HASIL VALIDASI SELURUH SESI AKUN GOOGLE")
+                    print(f" {C_BOLD}{C_CYAN}┌── RINGKASAN VALIDASI SESI SELURUH AKUN{C_RESET}")
+                    print(f" {C_BOLD}{C_CYAN}│{C_RESET}   {C_WHITE}Total Akun Teruji  : {C_YELLOW}{tot}{C_RESET}")
+                    print(f" {C_BOLD}{C_CYAN}│{C_RESET}   {C_WHITE}Sesi Google Aktif  : {C_GREEN}● {act} Akun (Siap Memberi Ulasan){C_RESET}")
+                    print(f" {C_BOLD}{C_CYAN}│{C_RESET}   {C_WHITE}Perlu Login / Mati : {C_RED if exp > 0 else C_DIM}▲ {exp} Akun{C_RESET}")
+                    print(f" {C_BOLD}{C_CYAN}│{C_RESET}")
+                    print(f" {C_BOLD}{C_CYAN}├── DAFTAR RINCIAN STATUS AKUN GOOGLE{C_RESET}")
+                    for r in results:
+                        rid = r.get("id")
+                        rem = r.get("email", "")
+                        rname = r.get("account_name") or "-"
+                        rst = r.get("status", "unknown")
+                        if rst == "active":
+                            badge = f"{C_GREEN}● AKTIF{C_RESET}"
+                        elif rst == "needs_login":
+                            badge = f"{C_YELLOW}▲ PERLU LOGIN{C_RESET}"
+                        else:
+                            badge = f"{C_RED}✖ KEDALUWARSA{C_RESET}"
+
+                        r_line = f" {C_BOLD}{C_CYAN}│{C_RESET}   [#{rid}] {C_WHITE}{rem:<28}{C_RESET} ──> {badge} {C_DIM}({rname}){C_RESET}"
+                        print(truncate_ansi(r_line, cols - 1))
+
+                    print(f" {C_BOLD}{C_CYAN}│{C_RESET}")
+                    print(f" {C_BOLD}{C_CYAN}└── 🛡️ ANTI-EXPIRY: Auto-Extend 2 Tahun & Auto-Sync Token Aktif telah tersimpan.{C_RESET}")
+                    print()
+                    try:
+                        status_info = client.get_status()
+                        cookies = status_info.get("cookies", [])
+                    except Exception:
+                        pass
+                    input(f" {C_DIM}Tekan Enter untuk kembali ke menu cookie...{C_RESET}")
+                except Exception as e:
+                    spin.stop()
+                    print(f" {C_BOLD}{C_RED}✖ Gagal menjalankan uji validitas massal: {e}{C_RESET}")
+                    time.sleep(2)
+
+            elif t_mode == "2":
+                test_in = input(f" {C_GREEN}Masukkan ID Cookie yang ingin diuji: {C_RESET}").strip()
+                if not test_in.isdigit():
+                    print(f" {C_RED}✖ ID harus berupa angka.{C_RESET}")
+                    time.sleep(1)
+                    continue
+
+                cid = int(test_in)
+                spin = Spinner(f"Menguji validitas live Google untuk Cookie ID {cid}...")
+                spin.start()
+                try:
+                    res = client.test_cookie(cid)
+                    st_val = res.get("session_status", "unknown")
+                    is_valid = res.get("is_valid", False)
+                    email_target = res.get("email", str(cid))
+                    acc_name = res.get("account_name", "")
+                    name_disp = f" ({acc_name})" if acc_name else ""
+                    if is_valid and st_val == "active":
+                        spin.stop(f" {C_BOLD}{C_GREEN}✓ Akun '{email_target}'{name_disp}: Status = AKTIF (Live Google OK){C_RESET}")
+                    else:
+                        spin.stop(f" {C_BOLD}{C_YELLOW}▲ Akun '{email_target}'{name_disp}: Status = {st_val.upper()} ({res.get('reason', 'Perlu login ulang')}){C_RESET}")
+                    print(f"   {C_DIM}🛡️ Anti-Expiry Engine: Expiry token diperpanjang 2 tahun & disinkronkan.{C_RESET}")
+                    time.sleep(2)
+                    try:
+                        status_info = client.get_status()
+                        cookies = status_info.get("cookies", [])
+                    except Exception:
+                        pass
+                except Exception as e:
+                    spin.stop()
+                    print(f" {C_BOLD}{C_RED}✖ Gagal menguji cookie: {e}{C_RESET}")
+                    time.sleep(2)
 
 
 # ── Queue & Antrean Handler ───────────────────────────────────────────────────

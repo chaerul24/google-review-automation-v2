@@ -98,6 +98,62 @@ def process_business(biz_id):
     db.add_process_log(biz_id, "Worker selesai memproses review saat ini.")
 
 
+SESSION_KEEPALIVE_INTERVAL = 21600  # 6 hours
+_last_keepalive_ts = 0.0
+
+
+def periodic_session_keepalive(force: bool = False):
+    """Keep Google account sessions alive by periodically pinging myaccount.google.com,
+    auto-refreshing session status, and persisting refreshed rotating tokens.
+    """
+    global _last_keepalive_ts
+    now = time.time()
+    if not force and (now - _last_keepalive_ts < SESSION_KEEPALIVE_INTERVAL):
+        return
+
+    _last_keepalive_ts = now
+    try:
+        import session_manager
+        with db.get_db() as conn:
+            cookies = conn.execute("SELECT id, email, cookie_json FROM cookies ORDER BY id ASC").fetchall()
+
+        if not cookies:
+            return
+
+        log.info("Starting background Google session keep-alive for %d accounts...", len(cookies))
+        active_cnt = 0
+        for row in cookies:
+            cid = row["id"]
+            email = row["email"]
+            c_json = row["cookie_json"]
+            try:
+                res = session_manager.check_google_account_live(c_json, fallback_email=email)
+                st_val = res.get("status") or "needs_login"
+                acc_name = res.get("account_name") or ""
+                reason = res.get("reason") or ""
+                if st_val == "active":
+                    active_cnt += 1
+                with db.get_db() as conn:
+                    conn.execute(
+                        """UPDATE cookies
+                           SET status = ?, account_name = (CASE WHEN ? != '' THEN ? ELSE account_name END),
+                               last_checked_at = CURRENT_TIMESTAMP, error_reason = ?
+                           WHERE id = ?""",
+                        (st_val, acc_name, acc_name, reason, cid),
+                    )
+                    if acc_name:
+                        conn.execute("UPDATE emails SET account_name = ? WHERE email = ?", (acc_name, email))
+                    if st_val == "active":
+                        conn.execute("UPDATE emails SET flagged = 0, fail_count = 0 WHERE email = ?", (email,))
+            except Exception as e:
+                log.warning("Keepalive check failed for %s: %s", email, e)
+            time.sleep(2)  # polite jitter between account pings
+
+        log.info("Background Google session keep-alive complete: %d/%d accounts active.", active_cnt, len(cookies))
+    except Exception as exc:
+        log.warning("Error during periodic session keep-alive: %s", exc)
+
+
 def auto_replenish_drip_jobs():
     """If drip campaign is enabled, ensure businesses with review goals have pending jobs queued."""
     try:
@@ -158,6 +214,7 @@ def main():
 
     while True:
         try:
+            periodic_session_keepalive()
             auto_replenish_drip_jobs()
             process_pending_jobs()
         except Exception as exc:

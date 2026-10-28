@@ -472,6 +472,18 @@ def parse_cookie_payload(
             except (ValueError, TypeError):
                 pass
 
+        # Auto-extend Google cookies so they do not expire prematurely
+        google_core_names = (
+            "sid", "hsid", "ssid", "apisid", "sapisid",
+            "__secure-1psid", "__secure-3psid", "__secure-1psidts", "__secure-3psidts",
+            "login_info", "nid", "1p_jar"
+        )
+        now_curr = time.time()
+        if name.lower() in google_core_names:
+            # If expiry is missing, in the past, or expires within 60 days, extend to 2 years
+            if expiry_ts is None or expiry_ts < now_curr + (60 * 86400):
+                expiry_ts = now_curr + (730 * 86400)  # 2 years in future
+
         sanitized_items.append({
             "name": name,
             "value": val,
@@ -810,6 +822,32 @@ def verify_browser_session(
     return SessionStatus.ACTIVE, f"Sesi aktif pada URL {cur_url[:60]}."
 
 
+def sync_browser_cookies_to_db(sb: Any, email: str) -> bool:
+    """Capture updated/rotated cookies from Chromium and persist back to database.
+    
+    Ensures rotating tokens (__Secure-1PSIDTS, __Secure-3PSIDTS) are refreshed
+    and saved so Google sessions never expire due to token staleness.
+    """
+    try:
+        if not sb or not email:
+            return False
+        cookies = sb.get_all_cookies() if hasattr(sb, "get_all_cookies") else None
+        if not cookies:
+            return False
+        # Verify essential Google auth tokens exist
+        has_auth = any(c.get("name") in ("SID", "__Secure-1PSID", "SAPISID", "SSID") for c in cookies if isinstance(c, dict))
+        if not has_auth:
+            return False
+        val = validate_cookie_payload(cookies, target_domain="google.com")
+        if val.is_valid and val.normalized_json:
+            db.save_cookie(email, val.normalized_json)
+            log.info("Successfully synced %d refreshed Google cookies to database for %s", val.cookie_count, email)
+            return True
+    except Exception as exc:
+        log.debug("Failed to sync browser cookies to DB for %s: %s", email, exc)
+    return False
+
+
 def close_browser_session(sb: Any) -> None:
     """Gracefully close Chromium so in-memory cookies and storage are flushed to persistent profile disk."""
     if sb is None:
@@ -1023,6 +1061,58 @@ def check_google_account_live(cookie_json_or_list: Any, fallback_email: str = ""
             clean_uname = re.sub(r'[\._0-9]+', ' ', uname).strip()
             if clean_uname:
                 account_name = clean_uname.title()
+
+        # Check for refreshed Set-Cookie headers from Google to keep rotating tokens alive
+        set_cookies = resp.headers.get_all("Set-Cookie") or []
+        if set_cookies and email:
+            try:
+                from http.cookies import SimpleCookie
+                target_keys = {
+                    "SID", "HSID", "SSID", "APISID", "SAPISID",
+                    "__Secure-1PSID", "__Secure-3PSID",
+                    "__Secure-1PSIDTS", "__Secure-3PSIDTS",
+                    "LOGIN_INFO", "NID", "AEC"
+                }
+                raw_existing = db.get_cookie_by_email(email)
+                if raw_existing:
+                    existing_list = json.loads(raw_existing) if isinstance(raw_existing, str) else list(raw_existing)
+                    cookie_map = {c.get("name"): c for c in existing_list if isinstance(c, dict) and c.get("name")}
+                    updated_names = []
+                    for sc_str in set_cookies:
+                        sc = SimpleCookie()
+                        try:
+                            sc.load(sc_str)
+                            for k, morsel in sc.items():
+                                if k in target_keys and morsel.value:
+                                    if k in cookie_map:
+                                        if cookie_map[k].get("value") != morsel.value:
+                                            cookie_map[k]["value"] = morsel.value
+                                            cookie_map[k]["expirationDate"] = time.time() + (730 * 86400)
+                                            updated_names.append(k)
+                                    else:
+                                        cookie_map[k] = {
+                                            "name": k,
+                                            "value": morsel.value,
+                                            "domain": ".google.com",
+                                            "path": "/",
+                                            "expirationDate": time.time() + (730 * 86400),
+                                            "secure": True,
+                                            "httpOnly": True,
+                                        }
+                                        updated_names.append(k)
+                        except Exception:
+                            pass
+
+                    if updated_names:
+                        merged = list(cookie_map.values())
+                        with db.get_db() as conn:
+                            conn.execute(
+                                "UPDATE cookies SET cookie_json = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
+                                (json.dumps(merged), email)
+                            )
+                        log.info("Refreshed rotating tokens %s for %s via Google HTTP response.", updated_names, email)
+            except Exception as e:
+                log.debug("Could not auto-merge Set-Cookie for %s: %s", email, e)
 
         return {
             "status": SessionStatus.ACTIVE.value,

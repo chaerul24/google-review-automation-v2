@@ -694,6 +694,10 @@ def post_review(
         return False
 
     finally:
+        try:
+            session_manager.sync_browser_cookies_to_db(sb, email)
+        except Exception:
+            pass
         session_manager.close_browser_session(sb)
         lock.release()
 
@@ -754,6 +758,10 @@ def inspect_existing_review(email, maps_url, business_name, review_id=None, busi
         log.warning("Read-only review inspection failed for %s: %s", email, exc)
         return {"status": "unknown", "message": f"Tidak dapat memverifikasi ulasan: {str(exc)[:180]}"}
     finally:
+        try:
+            session_manager.sync_browser_cookies_to_db(sb, email)
+        except Exception:
+            pass
         session_manager.close_browser_session(sb)
         lock.release()
 
@@ -968,6 +976,10 @@ def delete_own_review_on_maps(email, maps_url, business_name, email_id=None, bus
         db.add_process_log(business_id, f"[{email}] Gagal menghapus ulasan di Maps: {str(exc)[:150]}", email_id, "error")
         return {"status": "error", "message": f"Gagal menghapus ulasan: {str(exc)[:180]}"}
     finally:
+        try:
+            session_manager.sync_browser_cookies_to_db(sb, email)
+        except Exception:
+            pass
         session_manager.close_browser_session(sb)
         lock.release()
 
