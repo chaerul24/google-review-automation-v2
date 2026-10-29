@@ -21,6 +21,8 @@ from session_manager import SessionManager, ProfileLock, ProfileLockedError, Ses
 import json as _json
 import re
 import urllib.parse
+from pathlib import Path
+from typing import Tuple, Dict, Any, List
 load_dotenv()
 
 log = logging.getLogger(__name__)
@@ -417,13 +419,124 @@ def login_with_google_credentials(sb, email, password, totp_secret=None, busines
         session_manager.sync_browser_cookies_to_db(sb, email)
         with db.get_db() as conn:
             conn.execute("UPDATE emails SET flagged = 0, fail_count = 0 WHERE email = ?", (email,))
+            conn.execute("UPDATE cookies SET status = 'active', error_reason = NULL, last_checked_at = CURRENT_TIMESTAMP WHERE email = ?", (email,))
 
-        db.add_process_log(business_id, f"[{email}] ✓ Login akun Google dengan kredensial berhasil (Cookie otomatis tersimpan).", email_id, "success")
+        enforce_anti_logout_guard(sb, email)
+        db.add_process_log(business_id, f"[{email}] ✓ Login akun Google dengan kredensial berhasil (Cookie otomatis tersimpan & Anti-Logout aktif).", email_id, "success")
         return True, "Login berhasil."
 
     except Exception as exc:
         log.warning("Login with credentials failed for %s: %s", email, exc)
         return False, str(exc)
+
+
+# ── Anti-Logout Guard (Dilarang Logout) ────────────────────────────────────────
+
+FORBIDDEN_LOGOUT_URLS = [
+    "accounts.google.com/logout",
+    "accounts.google.com/signoutoptions",
+    "accounts.google.com/v3/signin/accountchooser?continue=https://accounts.google.com/logout",
+]
+
+
+def enforce_anti_logout_guard(sb, email=""):
+    """Strictly protect browser session against any logout actions.
+    Disallows navigation to Google logout URLs and blocks click on Sign Out elements.
+    """
+    if not sb:
+        return
+    try:
+        cur_url = (sb.get_current_url() or "").lower()
+        for forbidden in FORBIDDEN_LOGOUT_URLS:
+            if forbidden in cur_url:
+                log.warning("[Anti-Logout Guard] Terdeteksi upaya navigasi ke URL logout Google (%s) untuk %s. Membatalkan & mengalihkan ke Google Maps!", cur_url, email)
+                sb.get("https://www.google.com/maps?hl=en")
+                sb.sleep(2)
+                return
+    except Exception as exc:
+        log.debug("[Anti-Logout Guard] Check error: %s", exc)
+
+
+def auto_login_single_account(email: str, password: str, totp_secret: str = None) -> Tuple[bool, str]:
+    """Launch Chromium on virtual display to login an account and persist fresh active cookies."""
+    if not password or password == "cookie_auth":
+        return False, "Password tidak tersedia untuk akun ini."
+
+    profile_dir = Path(session_manager.get_profile_dir(email))
+    lock = session_manager.acquire_profile_lock(profile_dir)
+    if not lock.acquired:
+        time.sleep(1.0)
+        try:
+            lock.acquire(force=True)
+        except Exception as retry_err:
+            return False, f"Profil browser terkunci: {retry_err}"
+
+    fp = get_fingerprint(email)
+    sb = None
+    try:
+        chromium_args = [
+            "--disable-sync",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-default-apps",
+            "--disable-fre",
+            "--disable-chrome-login-prompt",
+            "--window-position=0,0",
+        ]
+        win_size_str = fp.get("res") or "1366,768"
+
+        for s_file in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            s_path = os.path.join(profile_dir, s_file)
+            if os.path.exists(s_path) or os.path.islink(s_path):
+                try:
+                    os.remove(s_path)
+                except Exception:
+                    pass
+
+        verification_url = "https://accounts.google.com/signin/v2/identifier?hl=en"
+        for launch_attempt in range(2):
+            try:
+                sb = sb_cdp.Chrome(
+                    verification_url,
+                    headed=True,
+                    user_data_dir=str(profile_dir),
+                    proxy=PROXY,
+                    agent=fp["ua"],
+                    window_size=win_size_str,
+                    locale_code=fp["locale"],
+                    chromium_arg=",".join(chromium_args),
+                    disable_features="SigninIntercept,ChromeWhatsNewUI,AccountConsistency",
+                )
+                break
+            except Exception as launch_exc:
+                if launch_attempt == 0 and ("111" in str(launch_exc) or "Connect call failed" in str(launch_exc)):
+                    session_manager.force_close_profile_processes(profile_dir)
+                    time.sleep(2.0)
+                else:
+                    raise
+
+        sb.maximize()
+        sb.sleep(2)
+
+        ok, msg = login_with_google_credentials(sb, email, password, totp_secret=totp_secret)
+        if ok:
+            session_manager.sync_browser_cookies_to_db(sb, email)
+            with db.get_db() as conn:
+                conn.execute("UPDATE cookies SET status = 'active', error_reason = NULL, last_checked_at = CURRENT_TIMESTAMP WHERE email = ?", (email,))
+                conn.execute("UPDATE emails SET flagged = 0, fail_count = 0 WHERE email = ?", (email,))
+            enforce_anti_logout_guard(sb, email)
+            return True, "Login berhasil, cookie sesi aktif tersimpan."
+        return False, msg
+
+    except Exception as exc:
+        return False, str(exc)
+    finally:
+        if sb:
+            try:
+                session_manager.close_browser_session(sb)
+            except Exception:
+                pass
+        lock.release()
 
 
 def _extract_cid_from_maps_url(maps_url: str) -> int | None:

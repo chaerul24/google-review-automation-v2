@@ -28,8 +28,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 # Version Tracking & Manifest
-CLI_VERSION = "v1.0.6"
-CLI_VERSION_CODE = 106
+CLI_VERSION = "v1.0.7"
+CLI_VERSION_CODE = 107
 
 # Enable ANSI colors on Windows cmd.exe
 if sys.platform == "win32":
@@ -335,6 +335,13 @@ class ServerClient:
             params.append("include_empty=1")
         query_str = ("?" + "&".join(params)) if params else ""
         return self._request(f"/api/cli/reviews/by-account{query_str}")
+
+    def auto_login_accounts(self, email: str = "") -> Dict[str, Any]:
+        """Trigger remote server to perform automated Chromium login for credential-backed accounts."""
+        payload = {}
+        if email:
+            payload["email"] = email
+        return self._request("/api/cli/cookies/auto-login", method="POST", data=payload)
 
     def get_cli_version(self) -> Dict[str, Any]:
         """Fetch version manifest and check for newer releases from server."""
@@ -1087,12 +1094,16 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
             name = (c.get("account_name") or "-").strip()
             email = c.get("email", "")
             c_status = (c.get("status") or "unknown").lower()
+            has_pwd = bool(c.get("has_password"))
+
             if c_status == "active":
                 st_badge = f"{C_GREEN}● AKTIF{C_RESET}"
+            elif has_pwd and c_status in ("needs_login", "no_cookie", "none", "missing", "expired"):
+                st_badge = f"{C_CYAN}🔑 SIAP (Auto-Login){C_RESET}"
             elif c_status in ("expired", "revoked", "invalid"):
                 st_badge = f"{C_RED}✖ KEDALUWARSA{C_RESET}"
             elif c_status == "needs_login":
-                st_badge = f"{C_YELLOW}▲ PERLU LOGIN{C_RESET}"
+                st_badge = f"{C_YELLOW}▲ PERLU LOGIN (No Pass){C_RESET}"
             elif c_status in ("no_cookie", "none", "missing"):
                 st_badge = f"{C_MAGENTA}○ BELUM ADA COOKIE{C_RESET}"
             else:
@@ -1104,34 +1115,42 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
         print()
         return
 
-    print(f" {C_BOLD}{'ID':<5} {'NAMA AKUN GOOGLE':<24} {'EMAIL AKUN':<32} {'STATUS SESI':<16}{C_RESET}")
-    print(" " + "─" * min(78, cols - 2))
+    print(f" {C_BOLD}{'ID':<5} {'NAMA AKUN GOOGLE':<24} {'EMAIL AKUN':<32} {'STATUS SESI':<20}{C_RESET}")
+    print(" " + "─" * min(82, cols - 2))
     has_no_cookie = False
+    has_auto_login = False
     for c in cookies:
         cid = c.get("id")
         name = (c.get("account_name") or "-").strip()[:22]
         email = c.get("email", "")[:30]
         c_status = (c.get("status") or "unknown").lower()
+        has_pwd = bool(c.get("has_password"))
 
         if c_status == "active":
             st_color = f"{C_GREEN}● AKTIF{C_RESET}"
+        elif has_pwd and c_status in ("needs_login", "no_cookie", "none", "missing", "expired"):
+            st_color = f"{C_CYAN}🔑 SIAP (Auto-Login){C_RESET}"
+            has_auto_login = True
         elif c_status in ("expired", "revoked", "invalid"):
             st_color = f"{C_RED}✖ KEDALUWARSA{C_RESET}"
         elif c_status == "needs_login":
-            st_color = f"{C_YELLOW}▲ PERLU LOGIN{C_RESET}"
+            st_color = f"{C_YELLOW}▲ PERLU LOGIN (No Pass){C_RESET}"
         elif c_status in ("no_cookie", "none", "missing"):
             st_color = f"{C_MAGENTA}○ BELUM ADA COOKIE{C_RESET}"
             has_no_cookie = True
         else:
             st_color = f"{C_DIM}- TIDAK AKTIF -{C_RESET}"
 
-        st_pad = pad_to_display_width(st_color, 16)
+        st_pad = pad_to_display_width(st_color, 20)
         row = f" {C_YELLOW}{cid:<5}{C_RESET} {C_WHITE}{name:<24}{C_RESET} {C_CYAN}{email:<32}{C_RESET} {st_pad}"
         print(truncate_ansi(row, cols - 1))
     print()
-    if has_no_cookie:
+    if has_auto_login:
+        print(f" {C_BOLD}{C_GREEN}🛡️  ANTI-LOGOUT GUARD AKTIF:{C_RESET} {C_WHITE}Bot dilindungi mutlak dari aksi logout Google.{C_RESET}")
+        print(f" {C_DIM}    Akun berstatus '{C_CYAN}🔑 SIAP (Auto-Login){C_DIM}' memiliki password tersimpan; bot otomatis login ulang saat task jalan.{C_RESET}\n")
+    elif has_no_cookie:
         print(f" {C_DIM}💡 Tips: Akun berstatus '{C_MAGENTA}○ BELUM ADA COOKIE{C_DIM}' baru didaftarkan lewat email/password.{C_RESET}")
-        print(f" {C_DIM}         Masukkan Cookie JSON akun tersebut melalui opsi [1] di bawah agar bot bisa login.{C_RESET}\n")
+        print(f" {C_DIM}         Gunakan opsi [5] Auto-Relogin atau masukkan Cookie JSON melalui opsi [1].{C_RESET}\n")
 
 
 def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
@@ -1159,11 +1178,12 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
         print(f"  {C_YELLOW}[2]{C_RESET} {C_WHITE}🗑️  Hapus Cookie (Berdasarkan ID atau Email){C_RESET}")
         print(f"  {C_YELLOW}[3]{C_RESET} {C_WHITE}🔍 Cek Nama Akun & Status Sesi (Live Check Google){C_RESET}")
         print(f"  {C_YELLOW}[4]{C_RESET} {C_WHITE}🔄 Uji Validitas Sesi Seluruh Akun (Live Batch Test & Auto-Refresh){C_RESET}")
+        print(f"  {C_YELLOW}[5]{C_RESET} {C_BOLD}{C_CYAN}🔑 Auto-Relogin Akun Google (Login Otomatis Akun Perlu Login){C_RESET}")
         print(f"  {C_YELLOW}[0]{C_RESET} {C_DIM}↩️  Kembali ke Menu Utama{C_RESET}")
         print()
 
         try:
-            c_opt = input(f" {C_GREEN}Pilih aksi cookie [0-4] (default 0): {C_RESET}").strip() or "0"
+            c_opt = input(f" {C_GREEN}Pilih aksi cookie [0-5] (default 0): {C_RESET}").strip() or "0"
         except (KeyboardInterrupt, EOFError):
             break
 
@@ -1374,6 +1394,55 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
                     spin.stop()
                     print(f" {C_BOLD}{C_RED}✖ Gagal menguji cookie: {e}{C_RESET}")
                     time.sleep(2)
+
+        elif c_opt in ("5", "l", "login"):
+            print_header_screen(client, title="AUTO-RELOGIN AKUN GOOGLE")
+            print(f" {C_CYAN}┌── PROSES LOGIN OTOMATIS AKUN GOOGLE{C_RESET}")
+            print(f" {C_CYAN}│{C_RESET}   {C_DIM}Membuka browser Chromium di server & login menggunakan Password tersimpan...{C_RESET}")
+            print(f" {C_CYAN}│   {C_DIM}Sesi baru akan otomatis disimpan sebagai cookie aktif (Anti-Logout aktif).{C_RESET}")
+            print(f" {C_CYAN}│{C_RESET}")
+
+            spin = Spinner("Sedang menjalankan auto-login akun Google...")
+            spin.start()
+            try:
+                res = client.auto_login_accounts()
+                spin.stop()
+            except Exception as exc:
+                spin.stop()
+                print(f" {C_CYAN}└──{C_RESET} {C_RED}Gagal auto-login: {exc}{C_RESET}")
+                input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+                continue
+
+            results = res.get("results", [])
+            if not results:
+                print(f" {C_CYAN}│   └──{C_RESET} {C_YELLOW}{res.get('message', 'Tidak ada akun yang perlu login ulang.')}{C_RESET}")
+            else:
+                for idx, r in enumerate(results, 1):
+                    em = r.get("email")
+                    st = r.get("status")
+                    msg = r.get("message")
+                    is_last = (idx == len(results))
+                    branch = "└──" if is_last else "├──"
+
+                    if st == "success":
+                        badge = f"{C_GREEN}✓ BERHASIL ● AKTIF{C_RESET}"
+                    elif st == "already_active":
+                        badge = f"{C_GREEN}● SUDAH AKTIF{C_RESET}"
+                    else:
+                        badge = f"{C_RED}✖ GAGAL ({msg}){C_RESET}"
+
+                    print(f" {C_CYAN}│   {branch}{C_RESET} [{idx}] {C_WHITE}{em}{C_RESET} ────> {badge}")
+
+            print(f" {C_CYAN}│{C_RESET}")
+            print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_GREEN}✓ {res.get('message', 'Auto-login selesai.')}{C_RESET}")
+
+            try:
+                cur_status = client.get_status()
+                cookies = cur_status.get("cookies", [])
+            except Exception:
+                pass
+
+            input(f"\n {C_DIM}Tekan Enter untuk kembali ke tabel cookie...{C_RESET}")
 
 
 # ── Queue & Antrean Handler ───────────────────────────────────────────────────

@@ -473,10 +473,17 @@ CLI_VERSIONS = [
         "title": "Fitur List Komentar Per Akun & Total Bintang",
         "description": "Menu baru visualisasi ulasan per akun Google dengan struktur garis line (tree), rincian komentar per bisnis, dan perhitungan Total Bintang per akun serta grand total.",
     },
+    {
+        "version": "v1.0.7",
+        "version_code": 107,
+        "release_date": "2026-10-29",
+        "title": "Anti-Logout Guard, Auto-Relogin Engine & Cookie Status Fix",
+        "description": "Perlindungan anti-logout akun Google, mesin auto-relogin untuk akun berpassword, badge status 🔑 SIAP (Auto-Login) di tabel cookie, dan perbaikan reset status cookie saat paste ulang.",
+    },
 ]
 
-LATEST_CLI_VERSION = "v1.0.6"
-LATEST_CLI_VERSION_CODE = 106
+LATEST_CLI_VERSION = "v1.0.7"
+LATEST_CLI_VERSION_CODE = 107
 
 
 @app.route("/api/cli/version", methods=["GET"])
@@ -616,7 +623,7 @@ def api_cli_status():
     with db.get_db() as conn:
         accounts = conn.execute("""
             SELECT e.id, e.email, COALESCE(e.account_name, c.account_name, '') AS account_name, e.flagged, c.status AS cookie_status,
-                   (CASE WHEN e.password IS NOT NULL AND TRIM(e.password) != '' THEN 1 ELSE 0 END) AS has_password
+                   (CASE WHEN e.password IS NOT NULL AND TRIM(e.password) != '' AND e.password != 'cookie_auth' THEN 1 ELSE 0 END) AS has_password
             FROM emails e
             LEFT JOIN cookies c ON e.email = c.email
             ORDER BY e.id ASC
@@ -632,7 +639,8 @@ def api_cli_status():
                 END AS status,
                 c.last_checked_at,
                 COALESCE(c.updated_at, e.created_at) AS updated_at,
-                c.error_reason
+                c.error_reason,
+                (CASE WHEN e.password IS NOT NULL AND TRIM(e.password) != '' AND e.password != 'cookie_auth' THEN 1 ELSE 0 END) AS has_password
             FROM emails e
             LEFT JOIN cookies c ON e.email = c.email
             UNION
@@ -643,7 +651,8 @@ def api_cli_status():
                 c.status,
                 c.last_checked_at,
                 c.updated_at,
-                c.error_reason
+                c.error_reason,
+                0 AS has_password
             FROM cookies c
             WHERE c.email NOT IN (SELECT email FROM emails)
             ORDER BY id ASC
@@ -834,6 +843,77 @@ def api_cli_delete_cookie():
         "message": f"Cookie untuk akun '{c_email}' (ID {cid}) berhasil dihapus.",
         "cookie_id": cid,
         "email": c_email
+    })
+
+
+@app.route("/api/cli/cookies/auto-login", methods=["POST"])
+@login_required
+def api_cli_auto_login_cookies():
+    """Batch auto-login to Google accounts that have passwords but are in needs_login/no_cookie state."""
+    data = request.get_json(silent=True) or request.form or {}
+    target_email = (data.get("email") or "").strip()
+
+    with db.get_db() as conn:
+        if target_email:
+            rows = conn.execute(
+                "SELECT e.id, e.email, e.password, e.totp_secret, c.status AS cookie_status FROM emails e LEFT JOIN cookies c ON e.email = c.email WHERE e.email = ?",
+                (target_email,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT e.id, e.email, e.password, e.totp_secret, c.status AS cookie_status FROM emails e LEFT JOIN cookies c ON e.email = c.email WHERE e.password IS NOT NULL AND TRIM(e.password) != '' AND e.password != 'cookie_auth' ORDER BY e.id ASC"
+            ).fetchall()
+
+    if not rows:
+        return jsonify({
+            "status": "ok",
+            "message": "Tidak ada akun dengan Password yang terdata untuk auto-login.",
+            "results": [],
+            "success_count": 0,
+            "failed_count": 0
+        })
+
+    import bot
+    results = []
+    success_count = 0
+    failed_count = 0
+
+    for r in rows:
+        email = r["email"]
+        pwd = r["password"]
+        totp = r["totp_secret"]
+        c_status = r["cookie_status"]
+
+        if not target_email and c_status == "active":
+            results.append({
+                "email": email,
+                "status": "already_active",
+                "message": "Sesi akun sudah aktif."
+            })
+            continue
+
+        ok, msg = bot.auto_login_single_account(email, pwd, totp_secret=totp)
+        if ok:
+            success_count += 1
+            results.append({
+                "email": email,
+                "status": "success",
+                "message": msg
+            })
+        else:
+            failed_count += 1
+            results.append({
+                "email": email,
+                "status": "failed",
+                "message": msg
+            })
+
+    return jsonify({
+        "status": "ok",
+        "message": f"Auto-login selesai: {success_count} berhasil, {failed_count} gagal.",
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "results": results
     })
 
 

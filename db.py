@@ -1159,13 +1159,13 @@ def save_cookie(email, cookie_json):
         ).fetchone()
         if existing:
             conn.execute(
-                "UPDATE cookies SET cookie_json = ?, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
+                "UPDATE cookies SET cookie_json = ?, status = 'active', error_reason = NULL, updated_at = CURRENT_TIMESTAMP WHERE email = ?",
                 (cookie_json, email),
             )
             return False  # updated
         else:
             conn.execute(
-                "INSERT INTO cookies (email, cookie_json) VALUES (?, ?)",
+                "INSERT INTO cookies (email, cookie_json, status) VALUES (?, ?, 'active')",
                 (email, cookie_json),
             )
             return True  # inserted
