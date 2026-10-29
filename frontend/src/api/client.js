@@ -225,6 +225,10 @@ export const api = {
     });
   },
 
+  async testLoginEmail(id) {
+    return request(`/api/emails/${id}/test-login`, { method: 'POST' });
+  },
+
   async unflagEmail(id) {
     return request(`/api/emails/${id}/unflag`, { method: 'POST' });
   },

@@ -3165,6 +3165,43 @@ def api_edit_email(email_id):
     return jsonify({"status": "ok", "message": "Akun berhasil diperbarui."})
 
 
+@app.route("/api/emails/<int:email_id>/test-login", methods=["POST"])
+@login_required
+def api_test_login_email(email_id):
+    """Coba login ke Google menggunakan email+password yang tersimpan untuk akun ini.
+    Menjalankan browser Chromium headless, login, dan menyimpan cookie jika berhasil."""
+    row = db.get_email_by_id(email_id)
+    if not row:
+        return jsonify({"status": "error", "message": "Akun tidak ditemukan."}), 404
+
+    email    = row["email"]
+    password = row.get("password") or ""
+    totp     = row.get("totp_secret") or None
+
+    if not password or password == "cookie_auth":
+        return jsonify({
+            "status": "error",
+            "message": f"Akun {email} tidak memiliki password tersimpan. Tambahkan password terlebih dahulu.",
+            "email": email,
+        }), 400
+
+    import bot as _bot
+    ok, msg = _bot.auto_login_single_account(email, password, totp_secret=totp)
+
+    if ok:
+        return jsonify({
+            "status": "success",
+            "message": msg or f"Login berhasil. Cookie akun {email} diperbarui.",
+            "email": email,
+        })
+    else:
+        return jsonify({
+            "status": "failed",
+            "message": msg or f"Login gagal untuk {email}.",
+            "email": email,
+        }), 200  # tetap 200 agar frontend bisa baca pesan gagal
+
+
 # ── Per-business review management ────────────────────────────────────────────
 
 @app.route("/business/<int:business_id>/reset-review/<int:review_id>", methods=["POST"])

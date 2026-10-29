@@ -45,7 +45,9 @@ import {
   ArrowUpRight,
   Info,
   User,
-  Pencil
+  Pencil,
+  FlaskConical,
+  Loader2
 } from 'lucide-react';
 import { api } from '../api/client';
 
@@ -135,6 +137,9 @@ export default function Dashboard({ onLogout }) {
   const [editAccountHasPassword, setEditAccountHasPassword] = useState(false);
   const [editAccountHasTotp, setEditAccountHasTotp] = useState(false);
   const [showEditPassword, setShowEditPassword] = useState(false);
+
+  // Test login per-account loading state  { [id]: 'loading' | 'success' | 'failed' }
+  const [testLoginStatus, setTestLoginStatus] = useState({});
 
   const [showCookieModal, setShowCookieModal] = useState(false);
   const [cookieForm, setCookieForm] = useState({ email: '', cookie_json: '' });
@@ -270,6 +275,33 @@ export default function Dashboard({ onLogout }) {
       setErrorMsg(`Gagal memperbarui akun: ${err.message || err}`);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleTestLogin = async (id, email, hasPassword) => {
+    if (!hasPassword) {
+      setErrorMsg(`Akun ${email} belum memiliki password tersimpan. Edit akun terlebih dahulu untuk menambahkan password.`);
+      return;
+    }
+    setTestLoginStatus(s => ({ ...s, [id]: 'loading' }));
+    setSuccessMsg('');
+    setErrorMsg('');
+    try {
+      const res = await api.testLoginEmail(id);
+      if (res.status === 'success') {
+        setTestLoginStatus(s => ({ ...s, [id]: 'success' }));
+        setSuccessMsg(`✓ Login berhasil untuk ${email}! Cookie diperbarui.`);
+        loadDashboardData(true);
+      } else {
+        setTestLoginStatus(s => ({ ...s, [id]: 'failed' }));
+        setErrorMsg(`✗ Login gagal untuk ${email}: ${res.message || 'Tidak diketahui.'}`);
+      }
+    } catch (err) {
+      setTestLoginStatus(s => ({ ...s, [id]: 'failed' }));
+      setErrorMsg(`Error saat test login ${email}: ${err.message || err}`);
+    } finally {
+      // Reset icon kembali ke normal setelah 4 detik
+      setTimeout(() => setTestLoginStatus(s => ({ ...s, [id]: undefined })), 4000);
     }
   };
 
@@ -1788,6 +1820,48 @@ export default function Dashboard({ onLogout }) {
                               >
                                 <Pencil className="w-4 h-4" />
                               </button>
+
+                              {/* Tombol Test Login */}
+                              {(() => {
+                                const tlStatus = testLoginStatus[acc.id];
+                                const hasRealPwd = !!(acc.password && acc.password !== 'cookie_auth');
+                                const iconClass = "w-4 h-4";
+                                let btnClass = "p-1.5 rounded-lg transition-colors cursor-pointer ";
+                                let icon, titleText;
+
+                                if (tlStatus === 'loading') {
+                                  btnClass += "text-amber-500 bg-amber-50";
+                                  icon = <Loader2 className={`${iconClass} animate-spin`} />;
+                                  titleText = "Sedang mencoba login...";
+                                } else if (tlStatus === 'success') {
+                                  btnClass += "text-emerald-600 bg-emerald-50";
+                                  icon = <Check className={iconClass} />;
+                                  titleText = "Login berhasil!";
+                                } else if (tlStatus === 'failed') {
+                                  btnClass += "text-rose-600 bg-rose-50";
+                                  icon = <X className={iconClass} />;
+                                  titleText = "Login gagal";
+                                } else if (!hasRealPwd) {
+                                  btnClass += "text-slate-300 cursor-not-allowed";
+                                  icon = <FlaskConical className={iconClass} />;
+                                  titleText = "Tidak ada password — edit akun untuk menambahkan";
+                                } else {
+                                  btnClass += "text-slate-400 hover:text-violet-600 hover:bg-violet-50";
+                                  icon = <FlaskConical className={iconClass} />;
+                                  titleText = "Test Login ke Google dengan password tersimpan";
+                                }
+
+                                return (
+                                  <button
+                                    onClick={() => tlStatus !== 'loading' && handleTestLogin(acc.id, acc.email, hasRealPwd)}
+                                    title={titleText}
+                                    disabled={tlStatus === 'loading'}
+                                    className={btnClass}
+                                  >
+                                    {icon}
+                                  </button>
+                                );
+                              })()}
 
                               {/* Pasang / Update Cookie button */}
                               <button
