@@ -218,6 +218,13 @@ export const api = {
     return request(`/api/emails/${id}`, { method: 'DELETE' });
   },
 
+  async updateEmail(id, email, password, totp_secret) {
+    return request(`/api/emails/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ email, password: password || undefined, totp_secret: totp_secret || undefined }),
+    });
+  },
+
   async unflagEmail(id) {
     return request(`/api/emails/${id}/unflag`, { method: 'POST' });
   },

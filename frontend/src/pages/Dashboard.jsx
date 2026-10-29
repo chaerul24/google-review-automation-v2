@@ -44,7 +44,8 @@ import {
   Radio,
   ArrowUpRight,
   Info,
-  User
+  User,
+  Pencil
 } from 'lucide-react';
 import { api } from '../api/client';
 
@@ -127,6 +128,13 @@ export default function Dashboard({ onLogout }) {
   // Modals
   const [showAddAccountModal, setShowAddAccountModal] = useState(false);
   const [accountForm, setAccountForm] = useState({ email: '', password: '', totp_secret: '' });
+
+  // Edit account modal state
+  const [showEditAccountModal, setShowEditAccountModal] = useState(false);
+  const [editAccountForm, setEditAccountForm] = useState({ id: null, email: '', password: '', totp_secret: '' });
+  const [editAccountHasPassword, setEditAccountHasPassword] = useState(false);
+  const [editAccountHasTotp, setEditAccountHasTotp] = useState(false);
+  const [showEditPassword, setShowEditPassword] = useState(false);
 
   const [showCookieModal, setShowCookieModal] = useState(false);
   const [cookieForm, setCookieForm] = useState({ email: '', cookie_json: '' });
@@ -233,6 +241,35 @@ export default function Dashboard({ onLogout }) {
       loadDashboardData(true);
     } catch (err) {
       setErrorMsg(`Gagal menghapus akun: ${err.message || err}`);
+    }
+  };
+
+  const openEditAccountModal = (acc) => {
+    setEditAccountForm({ id: acc.id, email: acc.email, password: '', totp_secret: '' });
+    setEditAccountHasPassword(!!(acc.password && acc.password !== 'cookie_auth'));
+    setEditAccountHasTotp(!!acc.totp_secret);
+    setShowEditPassword(false);
+    setShowEditAccountModal(true);
+  };
+
+  const handleEditAccountSubmit = async (e) => {
+    e.preventDefault();
+    if (!editAccountForm.email) return;
+    setSubmitting(true);
+    try {
+      await api.updateEmail(
+        editAccountForm.id,
+        editAccountForm.email,
+        editAccountForm.password || null,
+        editAccountForm.totp_secret || null,
+      );
+      setSuccessMsg(`Akun berhasil diperbarui.`);
+      setShowEditAccountModal(false);
+      loadDashboardData(true);
+    } catch (err) {
+      setErrorMsg(`Gagal memperbarui akun: ${err.message || err}`);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -1743,6 +1780,15 @@ export default function Dashboard({ onLogout }) {
                           {/* Aksi */}
                           <td className="py-3.5 px-4 text-right">
                             <div className="flex items-center justify-end gap-1">
+                              {/* Tombol Edit (Pensil) */}
+                              <button
+                                onClick={() => openEditAccountModal(acc)}
+                                title="Edit Email / Password / TOTP"
+                                className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </button>
+
                               {/* Pasang / Update Cookie button */}
                               <button
                                 onClick={() => {
@@ -2243,6 +2289,109 @@ export default function Dashboard({ onLogout }) {
       {/* ========================================================================= */}
       {/* MODALS                                                                    */}
       {/* ========================================================================= */}
+
+      {/* Modal: Edit Akun Google */}
+      {showEditAccountModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowEditAccountModal(false); }}
+        >
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 max-w-md w-full shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                <Pencil className="w-5 h-5 text-blue-600" />
+                <span>Edit Akun Google</span>
+              </h3>
+              <button
+                onClick={() => setShowEditAccountModal(false)}
+                className="text-slate-400 hover:text-slate-700 p-1 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditAccountSubmit} className="space-y-4">
+              {/* Email */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Email Google</label>
+                <input
+                  type="email"
+                  value={editAccountForm.email}
+                  onChange={(e) => setEditAccountForm(f => ({ ...f, email: e.target.value }))}
+                  required
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-800 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
+                />
+              </div>
+
+              {/* Password */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Password
+                  <span className="text-slate-400 font-normal ml-1">(kosongkan jika tidak diubah)</span>
+                </label>
+                {editAccountHasPassword && (
+                  <p className="text-[11px] text-emerald-600 font-medium mb-1.5 flex items-center gap-1">
+                    <Check className="w-3 h-3" /> Password tersimpan · kosongkan untuk mempertahankan
+                  </p>
+                )}
+                <div className="relative">
+                  <input
+                    type={showEditPassword ? 'text' : 'password'}
+                    value={editAccountForm.password}
+                    onChange={(e) => setEditAccountForm(f => ({ ...f, password: e.target.value }))}
+                    placeholder="Password baru..."
+                    className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 pr-10 text-sm text-slate-800 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowEditPassword(v => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    {showEditPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* TOTP */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  TOTP Secret (2FA)
+                  <span className="text-slate-400 font-normal ml-1">(opsional)</span>
+                </label>
+                {editAccountHasTotp && (
+                  <p className="text-[11px] text-blue-600 font-medium mb-1.5 flex items-center gap-1">
+                    <Check className="w-3 h-3" /> TOTP tersimpan · kosongkan untuk mempertahankan
+                  </p>
+                )}
+                <input
+                  type="text"
+                  value={editAccountForm.totp_secret}
+                  onChange={(e) => setEditAccountForm(f => ({ ...f, totp_secret: e.target.value }))}
+                  placeholder="JBSWY3DPEHPK3PXP..."
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-mono text-slate-800 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-bold py-2.5 rounded-xl text-sm transition-colors cursor-pointer"
+                >
+                  {submitting ? 'Menyimpan...' : 'Simpan Perubahan'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowEditAccountModal(false)}
+                  className="px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2.5 rounded-xl text-sm transition-colors border border-slate-200 cursor-pointer"
+                >
+                  Batal
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Tambah Akun Google */}
       {showAddAccountModal && (
