@@ -359,7 +359,22 @@ def login_with_google_credentials(sb, email, password, totp_secret=None, busines
 
         # Input Password
         pwd_sel = 'input[type="password"], input[name="Passwd"], input[name="password"]'
-        sb.wait_for_element_visible(pwd_sel, timeout=20)
+        try:
+            sb.wait_for_element_visible(pwd_sel, timeout=15)
+        except Exception:
+            body_txt = (sb.get_text("body") or "").lower()
+            if "couldn't find your google account" in body_txt or "tidak dapat menemukan akun" in body_txt:
+                return False, "Akun Google tidak ditemukan atau salah ketik."
+            if "browser or app may not be secure" in body_txt or "tidak aman" in body_txt:
+                return False, "Google memblokir login otomatis (Browser not secure). Solusi: gunakan Cookie."
+            if "verify it's you" in body_txt or "verifikasi" in body_txt:
+                return False, "Google meminta verifikasi keamanan tambahan (No. HP/Email pemulihan). Solusi: gunakan Cookie."
+            if "captcha" in body_txt or "robot" in body_txt or "unusual traffic" in body_txt:
+                return False, "Google menampilkan CAPTCHA keamanan. Solusi: gunakan Cookie."
+            if "disabled" in body_txt or "dinonaktifkan" in body_txt:
+                return False, "Akun Google telah dinonaktifkan/ditangguhkan oleh Google."
+            return False, "Kolom sandi tidak muncul (Google mengalihkan halaman atau meminta verifikasi)."
+
         sb.click(pwd_sel)
         sb.sleep(1)
         sb.type(pwd_sel, password)
@@ -462,14 +477,15 @@ def auto_login_single_account(email: str, password: str, totp_secret: str = None
     if not password or password == "cookie_auth":
         return False, "Password tidak tersedia untuk akun ini."
 
+    slot_display = ensure_virtual_display(":99")
+    os.environ["DISPLAY"] = slot_display
+
     profile_dir = Path(session_manager.get_profile_dir(email))
-    lock = session_manager.acquire_profile_lock(profile_dir)
-    if not lock.acquired:
-        time.sleep(1.0)
-        try:
-            lock.acquire(force=True)
-        except Exception as retry_err:
-            return False, f"Profil browser terkunci: {retry_err}"
+    lock = ProfileLock(profile_dir)
+    try:
+        lock.acquire(force=True)
+    except ProfileLockedError as lock_err:
+        return False, f"Profil browser terkunci: {lock_err}"
 
     fp = get_fingerprint(email)
     sb = None

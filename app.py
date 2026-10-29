@@ -3185,8 +3185,16 @@ def api_test_login_email(email_id):
             "email": email,
         }), 400
 
-    import bot as _bot
-    ok, msg = _bot.auto_login_single_account(email, password, totp_secret=totp)
+    try:
+        import bot as _bot
+        ok, msg = _bot.auto_login_single_account(email, password, totp_secret=totp)
+    except Exception as exc:
+        logging.exception("Error executing test login for %s", email)
+        return jsonify({
+            "status": "failed",
+            "message": f"Error internal bot: {str(exc)}",
+            "email": email,
+        }), 200
 
     if ok:
         return jsonify({

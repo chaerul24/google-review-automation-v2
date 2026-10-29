@@ -965,6 +965,8 @@ def delete_review(review_id):
 
 def add_process_log(business_id, message, review_id=None, level="info"):
     """Store a human-readable progress event for the dashboard."""
+    if not business_id:
+        return
     with get_db() as conn:
         conn.execute(
             "INSERT INTO process_logs (business_id, review_id, level, message) VALUES (?, ?, ?, ?)",
