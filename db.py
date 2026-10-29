@@ -435,6 +435,10 @@ def get_email_by_id(email_id):
 def update_email(email_id, new_email, new_password=None, new_totp_secret=None):
     """Update email, password, and/or TOTP secret for an existing account.
     Pass None for new_password / new_totp_secret to keep existing values."""
+    new_email = (new_email or "").strip().lower()
+    if not new_email:
+        raise ValueError("Email tidak boleh kosong.")
+
     with get_db() as conn:
         existing = conn.execute(
             "SELECT email, password, totp_secret FROM emails WHERE id = ?",
@@ -442,12 +446,37 @@ def update_email(email_id, new_email, new_password=None, new_totp_secret=None):
         ).fetchone()
         if not existing:
             return False
+
+        old_email = existing["email"]
+
+        # Check if another account already uses this email
+        dup = conn.execute(
+            "SELECT id, email FROM emails WHERE LOWER(email) = LOWER(?) AND id != ?",
+            (new_email, email_id),
+        ).fetchone()
+        if dup:
+            raise ValueError(f"Email '{new_email}' sudah terdaftar pada akun lain (ID #{dup['id']}). Gunakan email yang berbeda.")
+
         final_password = new_password if new_password is not None else existing["password"]
         final_totp = new_totp_secret if new_totp_secret is not None else existing["totp_secret"]
+
         conn.execute(
             "UPDATE emails SET email = ?, password = ?, totp_secret = ? WHERE id = ?",
             (new_email, final_password, final_totp, email_id),
         )
+
+        # Synchronize linked cookies table if old_email was stored there
+        if old_email.lower() != new_email.lower():
+            cookie_for_new = conn.execute(
+                "SELECT id FROM cookies WHERE LOWER(email) = LOWER(?)",
+                (new_email,)
+            ).fetchone()
+            if not cookie_for_new:
+                conn.execute(
+                    "UPDATE cookies SET email = ? WHERE LOWER(email) = LOWER(?)",
+                    (new_email, old_email),
+                )
+
         return True
 
 

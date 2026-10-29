@@ -10,6 +10,7 @@ import secrets
 import signal
 import subprocess
 import sys
+import sqlite3
 import shutil
 import socket
 import threading
@@ -18,7 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from functools import wraps
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus
 
 from dotenv import load_dotenv
 from flask import (
@@ -3143,10 +3144,15 @@ def edit_email(email_id):
     new_totp    = request.form.get("totp_secret", "").strip() or None
     if not new_email:
         return redirect(url_for("dashboard") + "?email_error=Email+tidak+boleh+kosong")
-    ok = db.update_email(email_id, new_email, new_password, new_totp)
-    if not ok:
-        return redirect(url_for("dashboard") + "?email_error=Akun+tidak+ditemukan")
-    return redirect(url_for("dashboard") + "?email_updated=1")
+    try:
+        ok = db.update_email(email_id, new_email, new_password, new_totp)
+        if not ok:
+            return redirect(url_for("dashboard") + "?email_error=Akun+tidak+ditemukan")
+        return redirect(url_for("dashboard") + "?email_updated=1")
+    except (sqlite3.IntegrityError, ValueError) as err:
+        return redirect(url_for("dashboard") + f"?email_error={quote_plus(str(err))}")
+    except Exception as exc:
+        return redirect(url_for("dashboard") + f"?email_error={quote_plus(str(exc))}")
 
 
 @app.route("/api/emails/<int:email_id>", methods=["PUT", "PATCH"])
@@ -3159,10 +3165,16 @@ def api_edit_email(email_id):
     new_totp    = (data.get("totp_secret") or "").strip() or None
     if not new_email:
         return jsonify({"status": "error", "message": "Email tidak boleh kosong."}), 400
-    ok = db.update_email(email_id, new_email, new_password, new_totp)
-    if not ok:
-        return jsonify({"status": "error", "message": "Akun tidak ditemukan."}), 404
-    return jsonify({"status": "ok", "message": "Akun berhasil diperbarui."})
+    try:
+        ok = db.update_email(email_id, new_email, new_password, new_totp)
+        if not ok:
+            return jsonify({"status": "error", "message": "Akun tidak ditemukan."}), 404
+        return jsonify({"status": "ok", "message": "Akun berhasil diperbarui."})
+    except (sqlite3.IntegrityError, ValueError) as err:
+        return jsonify({"status": "error", "message": str(err)}), 400
+    except Exception as exc:
+        logging.exception("Error updating email %s", email_id)
+        return jsonify({"status": "error", "message": f"Gagal memperbarui akun: {str(exc)}"}), 500
 
 
 @app.route("/api/emails/<int:email_id>/test-login", methods=["POST"])
