@@ -1,6 +1,7 @@
 import hashlib
 import json
 import random
+import re
 import sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -435,6 +436,133 @@ def get_reviews_for_business(business_id):
             (business_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_reviews_by_account(status: str = "reviewed", search: str = "", include_empty: bool = False) -> Dict[str, Any]:
+    """
+    Returns list of accounts with their reviews, grouped per account.
+    Calculates total reviews, total stars, and average stars per account.
+    Also provides a grand summary of all reviews.
+    """
+    with get_db() as conn:
+        where_clauses = []
+        params = []
+        
+        if status and status.lower() != "all":
+            where_clauses.append("r.status = ?")
+            params.append(status.lower())
+            
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        
+        sql = f"""
+            SELECT 
+                r.id AS review_id,
+                r.email_id,
+                COALESCE(e.email, 'Akun #' || r.email_id) AS email,
+                COALESCE(c.account_name, e.account_name, '') AS account_name,
+                r.business_id,
+                COALESCE(b.name, 'Bisnis #' || r.business_id) AS business_name,
+                COALESCE(r.star_rating, 5) AS star_rating,
+                r.review_text,
+                r.status,
+                r.reviewed_at,
+                r.created_at
+            FROM reviews r
+            LEFT JOIN emails e ON r.email_id = e.id
+            LEFT JOIN cookies c ON e.email = c.email
+            LEFT JOIN businesses b ON r.business_id = b.id
+            {where_sql}
+            ORDER BY COALESCE(c.account_name, e.account_name, e.email) ASC, r.reviewed_at DESC, r.id DESC
+        """
+        rows = conn.execute(sql, params).fetchall()
+        
+        accounts_map = {}
+        for row in rows:
+            r = dict(row)
+            acc_key = r["email"]
+            if acc_key not in accounts_map:
+                accounts_map[acc_key] = {
+                    "email_id": r["email_id"],
+                    "email": r["email"],
+                    "account_name": (r["account_name"] or "").strip() or "-",
+                    "total_reviews": 0,
+                    "total_stars": 0,
+                    "reviews": [],
+                }
+            
+            raw_txt = (r["review_text"] or "").strip()
+            clean_txt = re.sub(r'[\ue000-\uf8ff\x00-\x1f\x7f-\x9f]', ' ', raw_txt)
+            clean_txt = re.sub(r'[\r\n\t]+', ' ', clean_txt)
+            clean_txt = re.sub(r'\s{2,}', ' ', clean_txt).strip()
+            
+            star_val = int(r["star_rating"] or 0)
+            accounts_map[acc_key]["total_reviews"] += 1
+            accounts_map[acc_key]["total_stars"] += star_val
+            accounts_map[acc_key]["reviews"].append({
+                "id": r["review_id"],
+                "business_id": r["business_id"],
+                "business_name": r["business_name"],
+                "star_rating": star_val,
+                "review_text": clean_txt,
+                "status": r["status"],
+                "reviewed_at": str(r["reviewed_at"] or r["created_at"] or ""),
+            })
+            
+        if include_empty:
+            all_accounts = conn.execute("""
+                SELECT e.id AS email_id, e.email, COALESCE(c.account_name, e.account_name, '') AS account_name
+                FROM emails e
+                LEFT JOIN cookies c ON e.email = c.email
+                UNION
+                SELECT c.id AS email_id, c.email, COALESCE(c.account_name, '') AS account_name
+                FROM cookies c
+                WHERE c.email NOT IN (SELECT email FROM emails)
+            """).fetchall()
+            for a in all_accounts:
+                email = a["email"]
+                if email not in accounts_map:
+                    accounts_map[email] = {
+                        "email_id": a["email_id"],
+                        "email": email,
+                        "account_name": (a["account_name"] or "").strip() or "-",
+                        "total_reviews": 0,
+                        "total_stars": 0,
+                        "reviews": [],
+                    }
+                    
+        account_list = []
+        grand_total_reviews = 0
+        grand_total_stars = 0
+        
+        for acc in accounts_map.values():
+            if search:
+                s_lower = search.lower()
+                matches = (
+                    s_lower in acc["email"].lower()
+                    or s_lower in acc["account_name"].lower()
+                    or any(s_lower in rev["business_name"].lower() or s_lower in rev["review_text"].lower() for rev in acc["reviews"])
+                )
+                if not matches:
+                    continue
+            
+            tot_rev = acc["total_reviews"]
+            tot_star = acc["total_stars"]
+            acc["avg_stars"] = round(tot_star / tot_rev, 1) if tot_rev > 0 else 0.0
+            grand_total_reviews += tot_rev
+            grand_total_stars += tot_star
+            account_list.append(acc)
+            
+        grand_avg_stars = round(grand_total_stars / grand_total_reviews, 1) if grand_total_reviews > 0 else 0.0
+        
+        return {
+            "summary": {
+                "total_accounts": len(account_list),
+                "total_reviews": grand_total_reviews,
+                "grand_total_stars": grand_total_stars,
+                "average_stars": grand_avg_stars,
+            },
+            "accounts": account_list,
+        }
 
 
 def get_review_for_business(review_id, business_id):

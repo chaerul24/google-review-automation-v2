@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import unicodedata
@@ -27,8 +28,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 # Version Tracking & Manifest
-CLI_VERSION = "v1.0.5"
-CLI_VERSION_CODE = 105
+CLI_VERSION = "v1.0.6"
+CLI_VERSION_CODE = 106
 
 # Enable ANSI colors on Windows cmd.exe
 if sys.platform == "win32":
@@ -322,6 +323,18 @@ class ServerClient:
         if all_accounts:
             payload["all_accounts"] = True
         return self._request(f"/api/businesses/{business_id}/dark-mode/delete-maps-reviews", method="POST", data=payload)
+
+    def get_reviews_by_account(self, status: str = "reviewed", search: str = "", include_empty: bool = False) -> Dict[str, Any]:
+        """Fetch list of reviews grouped by Google account with star counts and comment history."""
+        params = []
+        if status:
+            params.append(f"status={urllib.parse.quote(status)}")
+        if search:
+            params.append(f"search={urllib.parse.quote(search)}")
+        if include_empty:
+            params.append("include_empty=1")
+        query_str = ("?" + "&".join(params)) if params else ""
+        return self._request(f"/api/cli/reviews/by-account{query_str}")
 
     def get_cli_version(self) -> Dict[str, Any]:
         """Fetch version manifest and check for newer releases from server."""
@@ -1675,6 +1688,186 @@ def handle_remove_review_menu(client: ServerClient, status_info: Dict[str, Any])
         input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
 
 
+# ── List Komentar Per Akun (Ulasan & Total Bintang) ───────────────────────────
+
+def render_account_reviews_tree(idx: int, acc: Dict[str, Any], term_w: int = 80):
+    box_w = min(term_w - 2, 78)
+    acc_name = (acc.get("account_name") or "").strip()
+    if acc_name in ("-", ""):
+        acc_name = ""
+    email = acc.get("email", "-")
+    total_rev = acc.get("total_reviews", 0)
+    total_stars = acc.get("total_stars", 0)
+    avg_stars = acc.get("avg_stars", 0.0)
+    reviews = acc.get("reviews", [])
+
+    if acc_name:
+        acc_hdr = f" [Akun #{idx}] {acc_name} ─── <{email}>"
+    else:
+        acc_hdr = f" [Akun #{idx}] {email}"
+    hdr_trimmed = truncate_ansi(acc_hdr, box_w - 6)
+    print(f" {C_CYAN}┌──{C_BOLD}{C_WHITE}{hdr_trimmed}{C_RESET}")
+
+    star_badge = f"{C_BOLD}{C_YELLOW}⭐ Total {total_stars} Bintang{C_RESET}"
+    avg_badge = f"{C_DIM}(Rata-rata {avg_stars} ★){C_RESET}" if total_rev > 0 else ""
+    rev_badge = f"{C_GREEN}{total_rev} Ulasan{C_RESET}"
+    print(f" {C_CYAN}│   ├──{C_RESET} {C_BOLD}📌 Ringkasan Akun :{C_RESET} {rev_badge} • {star_badge} {avg_badge}")
+
+    if not reviews:
+        print(f" {C_CYAN}│   └──{C_RESET} {C_DIM}💬 (Belum ada ulasan atau komentar yang dikirim dari akun ini){C_RESET}")
+        print(f" {C_CYAN}└" + "─" * (box_w - 1) + f"{C_RESET}\n")
+        return
+
+    print(f" {C_CYAN}│   │{C_RESET}")
+
+    for r_idx, rev in enumerate(reviews, 1):
+        is_last_rev = (r_idx == len(reviews))
+        rev_branch = "└──" if is_last_rev else "├──"
+        rev_trunk = "    " if is_last_rev else "│   "
+
+        biz_name = (rev.get("business_name") or f"Bisnis #{rev.get('business_id')}").strip()
+        star_val = int(rev.get("star_rating") or 5)
+        star_icon = "⭐" * star_val
+        date_display = (rev.get("reviewed_at") or "-")[:16]
+
+        biz_line = f"[{r_idx}] 🏢 {biz_name} ──> {star_icon} ({star_val}★) • {date_display}"
+        biz_trimmed = truncate_ansi(biz_line, box_w - 9)
+        print(f" {C_CYAN}│   {rev_branch}{C_RESET} {C_WHITE}{biz_trimmed}{C_RESET}")
+
+        comment_text = (rev.get("review_text") or "").strip()
+        if not comment_text:
+            print(f" {C_CYAN}│   {rev_trunk}└──{C_RESET} {C_DIM}💬 (Ulasan rating {star_val} bintang tanpa komentar teks){C_RESET}")
+        else:
+            max_comment_w = max(30, box_w - 20)
+            wrapped_lines = textwrap.wrap(comment_text, width=max_comment_w)
+            if wrapped_lines:
+                wrapped_lines[0] = f'"{wrapped_lines[0]}'
+                wrapped_lines[-1] = f'{wrapped_lines[-1]}"'
+                for l_idx, line in enumerate(wrapped_lines):
+                    if l_idx == 0:
+                        print(f" {C_CYAN}│   {rev_trunk}└──{C_RESET} {C_CYAN}💬 {C_WHITE}{line}{C_RESET}")
+                    else:
+                        print(f" {C_CYAN}│   {rev_trunk}       {C_WHITE}{line}{C_RESET}")
+
+        if not is_last_rev:
+            print(f" {C_CYAN}│   │{C_RESET}")
+
+    print(f" {C_CYAN}└" + "─" * (box_w - 1) + f"{C_RESET}\n")
+
+
+def handle_list_reviews_per_account(client: ServerClient, status_info: Optional[Dict[str, Any]] = None):
+    """Interactive screen displaying reviews grouped by Google account with tree lines and total star metrics."""
+    search_kw = ""
+    include_empty = False
+    status_filter = "reviewed"
+    current_page = 1
+    page_size = 5
+    show_all = False
+
+    while True:
+        print_header_screen(client, title="DAFTAR KOMENTAR & ULASAN PER AKUN", status_info=status_info)
+        term_w = get_terminal_width()
+        box_w = min(term_w - 2, 78)
+
+        spin = Spinner("Memuat daftar komentar dan ulasan per akun dari server...")
+        spin.start()
+        try:
+            res = client.get_reviews_by_account(status=status_filter, search=search_kw, include_empty=include_empty)
+            spin.stop()
+        except Exception as exc:
+            spin.stop()
+            print(f"\n {C_RED}✖ Gagal memuat data ulasan: {exc}{C_RESET}")
+            input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
+            return
+
+        summary = res.get("summary", {})
+        accounts = res.get("accounts", [])
+
+        # Summary box
+        line_w = box_w - 4
+        print(f" {C_CYAN}┌── {C_BOLD}📊 RINGKASAN TOTAL ULASAN & BINTANG{C_RESET}{C_CYAN} " + "─" * max(0, line_w - 36) + f"{C_RESET}")
+        print(f" {C_CYAN}│{C_RESET}   {C_WHITE}● Total Akun Pengulas :{C_RESET} {C_BOLD}{C_GREEN}{summary.get('total_accounts', 0)} Akun{C_RESET}")
+        print(f" {C_CYAN}│{C_RESET}   {C_WHITE}● Total Ulasan Sukses :{C_RESET} {C_BOLD}{C_GREEN}{summary.get('total_reviews', 0)} Ulasan{C_RESET}")
+        print(f" {C_CYAN}│{C_RESET}   {C_WHITE}● Grand Total Bintang :{C_RESET} {C_BOLD}{C_YELLOW}⭐ {summary.get('grand_total_stars', 0)} Bintang{C_RESET} {C_DIM}(Rata-rata: {summary.get('average_stars', 0.0)} ★ / Ulasan){C_RESET}")
+        if search_kw:
+            print(f" {C_CYAN}│{C_RESET}   {C_YELLOW}🔍 Filter Pencarian    :{C_RESET} {C_WHITE}\"{search_kw}\"{C_RESET}")
+        print(f" {C_CYAN}└" + "─" * (box_w - 1) + f"{C_RESET}\n")
+
+        if not accounts:
+            if search_kw:
+                print(f"  {C_YELLOW}Tidak ada ulasan atau akun yang cocok dengan kata kunci \"{search_kw}\".{C_RESET}\n")
+            else:
+                print(f"  {C_YELLOW}Belum ada ulasan yang tersimpan di database.{C_RESET}\n")
+        else:
+            total_items = len(accounts)
+            if show_all:
+                display_items = accounts
+                page_info = f"Menampilkan seluruh {total_items} akun sekaligus"
+            else:
+                total_pages = max(1, (total_items + page_size - 1) // page_size)
+                current_page = max(1, min(current_page, total_pages))
+                start_idx = (current_page - 1) * page_size
+                end_idx = min(start_idx + page_size, total_items)
+                display_items = accounts[start_idx:end_idx]
+                page_info = f"Halaman {current_page}/{total_pages} (Akun #{start_idx + 1} - #{end_idx} dari {total_items})"
+
+            for offset, acc in enumerate(display_items, 1):
+                global_idx = (current_page - 1) * page_size + offset if not show_all else offset
+                render_account_reviews_tree(global_idx, acc, term_w=term_w)
+
+        # Navigation Bar
+        print(f" {C_BOLD}{C_CYAN}─── OPSI & NAVIGASI DAFTAR KOMENTAR ──────────────────────────────────{C_RESET}")
+        if not show_all and accounts:
+            total_pages = max(1, (len(accounts) + page_size - 1) // page_size)
+            print(f"  {C_DIM}{page_info}{C_RESET}")
+            nav_parts = []
+            if current_page < total_pages:
+                nav_parts.append(f"{C_YELLOW}[N]{C_RESET} {C_WHITE}Halaman Berikutnya{C_RESET}")
+            if current_page > 1:
+                nav_parts.append(f"{C_YELLOW}[P]{C_RESET} {C_WHITE}Halaman Sebelumnya{C_RESET}")
+            nav_parts.append(f"{C_YELLOW}[A]{C_RESET} {C_WHITE}Tampilkan Semua Sekaligus{C_RESET}")
+            print("  " + "   ".join(nav_parts))
+        elif show_all and accounts:
+            print(f"  {C_YELLOW}[A]{C_RESET} {C_WHITE}Kembali ke Mode Paginasi ({page_size} Akun per Halaman){C_RESET}")
+
+        toggle_lbl = "Sembunyikan Akun Kosong" if include_empty else "Tampilkan Semua Akun (Termasuk Kosong)"
+        print(f"  {C_YELLOW}[C]{C_RESET} {C_WHITE}Cari / Filter (Akun/Bisnis/Teks){C_RESET}   {C_YELLOW}[T]{C_RESET} {C_WHITE}{toggle_lbl}{C_RESET}")
+        print(f"  {C_YELLOW}[R]{C_RESET} {C_WHITE}Segarkan Data (Refresh){C_RESET}           {C_YELLOW}[0]{C_RESET} {C_RED}Kembali ke Menu Utama{C_RESET}\n")
+
+        try:
+            cmd = input(f" {C_GREEN}Pilih opsi navigasi: {C_RESET}").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            break
+
+        if cmd in ("0", "q", "exit", "kembali"):
+            break
+        elif cmd == "n" and not show_all:
+            total_pages = max(1, (len(accounts) + page_size - 1) // page_size)
+            if current_page < total_pages:
+                current_page += 1
+            else:
+                print(f" {C_YELLOW}Sudah di halaman terakhir.{C_RESET}")
+                time.sleep(0.5)
+        elif cmd == "p" and not show_all:
+            if current_page > 1:
+                current_page -= 1
+            else:
+                print(f" {C_YELLOW}Sudah di halaman pertama.{C_RESET}")
+                time.sleep(0.5)
+        elif cmd == "a":
+            show_all = not show_all
+            current_page = 1
+        elif cmd == "t":
+            include_empty = not include_empty
+            current_page = 1
+        elif cmd == "c":
+            kw = input(f" {C_GREEN}Masukkan kata kunci pencarian (kosongkan untuk reset): {C_RESET}").strip()
+            search_kw = kw
+            current_page = 1
+        elif cmd == "r":
+            continue
+
+
 # ── Task Execution & Live Log Monitor ─────────────────────────────────────────
 
 def format_task_log_line(ts: str, lvl: str, msg: str, email: str = "", account_name: str = "") -> str:
@@ -2122,27 +2315,28 @@ def interactive_menu(client: ServerClient):
         print_banner(client, status_info)
 
         cookie_menu_label = (
-            f" {C_YELLOW}[4]{C_RESET} {C_WHITE}🍪  KELOLA COOKIE (ADMIN){C_RESET}   {C_DIM}Status, Tambah & Hapus Cookie Sesi{C_RESET}"
+            f" {C_YELLOW}[4]{C_RESET}  {C_WHITE}🍪  KELOLA COOKIE (ADMIN){C_RESET}   {C_DIM}Status, Tambah & Hapus Cookie Sesi{C_RESET}"
             if client.is_admin else
-            f" {C_YELLOW}[4]{C_RESET} {C_WHITE}🍪  STATUS COOKIE{C_RESET}        {C_DIM}Cek validitas akun Google & sesi CDP{C_RESET}"
+            f" {C_YELLOW}[4]{C_RESET}  {C_WHITE}🍪  STATUS COOKIE{C_RESET}        {C_DIM}Cek validitas akun Google & sesi CDP{C_RESET}"
         )
 
         menu_lines = [
-            f" {C_YELLOW}[1]{C_RESET} {C_WHITE}🚀  JALANKAN TASK{C_RESET}        {C_DIM}Mulai ulasan otomatis (Antrean / Paralel){C_RESET}",
-            f" {C_YELLOW}[2]{C_RESET} {C_WHITE}🏢  TARGET GOOGLE MAPS{C_RESET}   {C_DIM}Lihat daftar target & jumlah review{C_RESET}",
-            f" {C_YELLOW}[3]{C_RESET} {C_WHITE}➕  TAMBAH BISNIS BARU{C_RESET}   {C_DIM}Daftarkan URL Google Maps baru{C_RESET}",
+            f" {C_YELLOW}[1]{C_RESET}  {C_WHITE}🚀  JALANKAN TASK{C_RESET}        {C_DIM}Mulai ulasan otomatis (Antrean / Paralel){C_RESET}",
+            f" {C_YELLOW}[2]{C_RESET}  {C_WHITE}🏢  TARGET GOOGLE MAPS{C_RESET}   {C_DIM}Lihat daftar target & jumlah review{C_RESET}",
+            f" {C_YELLOW}[3]{C_RESET}  {C_WHITE}➕  TAMBAH BISNIS BARU{C_RESET}   {C_DIM}Daftarkan URL Google Maps baru{C_RESET}",
             cookie_menu_label,
-            f" {C_YELLOW}[5]{C_RESET} {C_WHITE}📊  PANTAU LIVE LOGS{C_RESET}     {C_DIM}Lihat log proses aktivitas server{C_RESET}",
-            f" {C_YELLOW}[6]{C_RESET} {C_WHITE}📋  DAFTAR ANTREAN{C_RESET}       {C_DIM}Lihat status antrean ulasan & urutan{C_RESET}",
-            f" {C_YELLOW}[7]{C_RESET} {C_WHITE}🛑  EMERGENCY STOP{C_RESET}       {C_DIM}Hentikan semua worker & browser{C_RESET}",
-            f" {C_YELLOW}[8]{C_RESET} {C_WHITE}🔄  RESET ANTREAN{C_RESET}        {C_DIM}Bersihkan antrean ulasan & log bisnis{C_RESET}",
-            f" {C_YELLOW}[9]{C_RESET} {C_WHITE}🗑️   REMOVE ULASAN{C_RESET}        {C_DIM}Hapus ulasan database atau Google Maps{C_RESET}",
-            f" {C_YELLOW}[0]{C_RESET} {C_RED}🚪  LOGOUT & KELUAR{C_RESET}      {C_DIM}Keluar dari sesi terminal{C_RESET}",
+            f" {C_YELLOW}[5]{C_RESET}  {C_WHITE}📊  PANTAU LIVE LOGS{C_RESET}     {C_DIM}Lihat log proses aktivitas server{C_RESET}",
+            f" {C_YELLOW}[6]{C_RESET}  {C_WHITE}📋  DAFTAR ANTREAN{C_RESET}       {C_DIM}Lihat status antrean ulasan & urutan{C_RESET}",
+            f" {C_YELLOW}[7]{C_RESET}  {C_WHITE}🛑  EMERGENCY STOP{C_RESET}       {C_DIM}Hentikan semua worker & browser{C_RESET}",
+            f" {C_YELLOW}[8]{C_RESET}  {C_WHITE}🔄  RESET ANTREAN{C_RESET}        {C_DIM}Bersihkan antrean ulasan & log bisnis{C_RESET}",
+            f" {C_YELLOW}[9]{C_RESET}  {C_WHITE}🗑️   REMOVE ULASAN{C_RESET}        {C_DIM}Hapus ulasan database atau Google Maps{C_RESET}",
+            f" {C_YELLOW}[10]{C_RESET} {C_WHITE}💬  LIST KOMENTAR PER AKUN{C_RESET} {C_DIM}Ulasan per akun Google & Total Bintang{C_RESET}",
+            f" {C_YELLOW}[0]{C_RESET}  {C_RED}🚪  LOGOUT & KELUAR{C_RESET}      {C_DIM}Keluar dari sesi terminal{C_RESET}",
         ]
         print_box(menu_lines, width=68, title=f"{C_BOLD}{C_CYAN}DAFTAR MENU UTAMA{C_RESET}")
 
         try:
-            choice = input(f" {C_GREEN}Pilih menu [0-9] (default 1): {C_RESET}").strip() or "1"
+            choice = input(f" {C_GREEN}Pilih menu [0-10] (default 1): {C_RESET}").strip() or "1"
         except (KeyboardInterrupt, EOFError):
             print("\n Keluar.")
             break
@@ -2361,6 +2555,9 @@ def interactive_menu(client: ServerClient):
 
         elif choice == "9":
             handle_remove_review_menu(client, status_info)
+
+        elif choice in ("10", "k", "komentar"):
+            handle_list_reviews_per_account(client, status_info)
 
 
 # ── CLI Arguments Entrypoint ──────────────────────────────────────────────────

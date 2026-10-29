@@ -466,10 +466,17 @@ CLI_VERSIONS = [
         "title": "Batch Cookie Live Validation & Google Anti-Expiry Engine",
         "description": "Uji validitas cookie massal seluruh akun (live batch test), auto-extend cookie 2 tahun, auto-sync rotating token, dan background keepalive heartbeat anti-kadaluarsa.",
     },
+    {
+        "version": "v1.0.6",
+        "version_code": 106,
+        "release_date": "2026-10-29",
+        "title": "Fitur List Komentar Per Akun & Total Bintang",
+        "description": "Menu baru visualisasi ulasan per akun Google dengan struktur garis line (tree), rincian komentar per bisnis, dan perhitungan Total Bintang per akun serta grand total.",
+    },
 ]
 
-LATEST_CLI_VERSION = "v1.0.5"
-LATEST_CLI_VERSION_CODE = 105
+LATEST_CLI_VERSION = "v1.0.6"
+LATEST_CLI_VERSION_CODE = 106
 
 
 @app.route("/api/cli/version", methods=["GET"])
@@ -662,6 +669,20 @@ def api_cli_status():
         "businesses": [dict(b) for b in businesses],
         "accounts": [dict(a) for a in accounts],
         "cookies": [dict(c) for c in cookies_list],
+    })
+
+
+@app.route("/api/cli/reviews/by-account", methods=["GET"])
+@login_required
+def api_cli_reviews_by_account():
+    """Returns all reviews grouped per Google account with star counts and comment history."""
+    status = request.args.get("status", "reviewed")
+    search = request.args.get("search", "").strip()
+    include_empty = request.args.get("include_empty", "0").lower() in ("1", "true", "yes")
+    data = db.get_reviews_by_account(status=status, search=search, include_empty=include_empty)
+    return jsonify({
+        "status": "ok",
+        **data
     })
 
 
