@@ -422,6 +422,35 @@ def delete_email(email_id):
         conn.execute("DELETE FROM emails WHERE id = ?", (email_id,))
 
 
+def get_email_by_id(email_id):
+    """Return a single email record by ID, or None if not found."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, email, password, totp_secret, flagged, fail_count FROM emails WHERE id = ?",
+            (email_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def update_email(email_id, new_email, new_password=None, new_totp_secret=None):
+    """Update email, password, and/or TOTP secret for an existing account.
+    Pass None for new_password / new_totp_secret to keep existing values."""
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT email, password, totp_secret FROM emails WHERE id = ?",
+            (email_id,),
+        ).fetchone()
+        if not existing:
+            return False
+        final_password = new_password if new_password is not None else existing["password"]
+        final_totp = new_totp_secret if new_totp_secret is not None else existing["totp_secret"]
+        conn.execute(
+            "UPDATE emails SET email = ?, password = ?, totp_secret = ? WHERE id = ?",
+            (new_email, final_password, final_totp, email_id),
+        )
+        return True
+
+
 # ── Per-business Reviews ──────────────────────────────────────────────────────
 
 def get_reviews_for_business(business_id):

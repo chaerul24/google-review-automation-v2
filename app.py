@@ -3125,13 +3125,44 @@ def api_add_email():
 
 
 @app.route("/emails/delete/<int:email_id>", methods=["POST"])
-@app.route("/api/emails/<int:email_id>", methods=["DELETE", "POST"])
+@app.route("/api/emails/<int:email_id>", methods=["DELETE"])
 @login_required
 def delete_email(email_id):
     db.delete_email(email_id)
     if request.path.startswith("/api/") or request.method == "DELETE":
         return jsonify({"status": "ok"})
     return redirect(url_for("dashboard"))
+
+
+@app.route("/emails/edit/<int:email_id>", methods=["POST"])
+@login_required
+def edit_email(email_id):
+    """Update email, password, dan/atau TOTP secret untuk akun master."""
+    new_email   = request.form.get("email", "").strip()
+    new_password = request.form.get("password", "").strip() or None
+    new_totp    = request.form.get("totp_secret", "").strip() or None
+    if not new_email:
+        return redirect(url_for("dashboard") + "?email_error=Email+tidak+boleh+kosong")
+    ok = db.update_email(email_id, new_email, new_password, new_totp)
+    if not ok:
+        return redirect(url_for("dashboard") + "?email_error=Akun+tidak+ditemukan")
+    return redirect(url_for("dashboard") + "?email_updated=1")
+
+
+@app.route("/api/emails/<int:email_id>", methods=["PUT", "PATCH"])
+@login_required
+def api_edit_email(email_id):
+    """REST endpoint: update master akun Google (email/password/totp)."""
+    data        = request.get_json(silent=True) or request.form
+    new_email   = (data.get("email") or "").strip()
+    new_password = (data.get("password") or "").strip() or None
+    new_totp    = (data.get("totp_secret") or "").strip() or None
+    if not new_email:
+        return jsonify({"status": "error", "message": "Email tidak boleh kosong."}), 400
+    ok = db.update_email(email_id, new_email, new_password, new_totp)
+    if not ok:
+        return jsonify({"status": "error", "message": "Akun tidak ditemukan."}), 404
+    return jsonify({"status": "ok", "message": "Akun berhasil diperbarui."})
 
 
 # ── Per-business review management ────────────────────────────────────────────
