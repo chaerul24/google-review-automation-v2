@@ -102,6 +102,24 @@ function GmailLogo({ className = "w-4 h-4 shrink-0" }) {
   );
 }
 
+function getProfileGradient(name = '') {
+  const gradients = [
+    'from-blue-500 to-indigo-600',
+    'from-emerald-500 to-teal-600',
+    'from-violet-500 to-purple-600',
+    'from-amber-500 to-orange-600',
+    'from-rose-500 to-pink-600',
+    'from-cyan-500 to-blue-600',
+    'from-fuchsia-500 to-pink-600',
+  ];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const idx = Math.abs(hash) % gradients.length;
+  return gradients[idx];
+}
+
 export default function Dashboard({ onLogout }) {
   const navigate = useNavigate();
 
@@ -1996,16 +2014,19 @@ export default function Dashboard({ onLogout }) {
                       const isAktif = ck.status === 'active';
                       const isNeedsLogin = ck.status === 'needs_login';
                       const isExpired = ck.status === 'expired' || ck.status === 'invalid';
+                      const displayName = (ck.account_name || ck.email || 'A').trim();
+                      const initial = displayName ? displayName.charAt(0).toUpperCase() : 'A';
+                      const avatarGradient = getProfileGradient(displayName);
 
                       return (
                         <tr key={ck.id} className="hover:bg-slate-50/60 transition-colors">
                           <td className="py-3.5 px-4 font-medium">
-                            <div className="flex items-center gap-2.5">
-                              <div className="w-7 h-7 rounded-lg bg-white border border-slate-200/90 shadow-2xs flex items-center justify-center shrink-0">
-                                <GmailLogo className="w-4 h-4" />
+                            <div className="flex items-center gap-3">
+                              <div className={`w-8 h-8 rounded-full bg-gradient-to-tr ${avatarGradient} text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-2xs`}>
+                                {initial}
                               </div>
                               <div>
-                                <p className="font-bold text-slate-900">
+                                <p className="font-bold text-slate-900 leading-tight">
                                   {ck.account_name || (
                                     <span className="text-slate-400 font-normal italic">- Belum Terverifikasi -</span>
                                   )}
