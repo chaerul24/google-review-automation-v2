@@ -181,6 +181,9 @@ export default function Dashboard({ onLogout }) {
 
   const [snippetModalCookie, setSnippetModalCookie] = useState(null);
 
+  // Checkbox selection state for cookies table
+  const [selectedCookieIds, setSelectedCookieIds] = useState(new Set());
+
   // Notifications
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -392,14 +395,29 @@ export default function Dashboard({ onLogout }) {
   };
 
   const handleDeleteCookie = async (id, email) => {
-    if (!window.confirm(`Hapus cookie sesi untuk akun "${email}"?`)) return;
+    if (!window.confirm(`Hapus akun "${email}" dari daftar?`)) return;
     try {
       await api.deleteCookie(id);
-      setSuccessMsg(`Cookie untuk "${email}" berhasil dihapus.`);
+      setSuccessMsg(`Akun "${email}" berhasil dihapus.`);
+      setSelectedCookieIds(prev => { const n = new Set(prev); n.delete(id); return n; });
       loadDashboardData(true);
     } catch (err) {
-      setErrorMsg(`Gagal menghapus cookie: ${err.message || err}`);
+      setErrorMsg(`Gagal menghapus akun: ${err.message || err}`);
     }
+  };
+
+  const handleBulkDeleteCookies = async () => {
+    if (selectedCookieIds.size === 0) return;
+    const count = selectedCookieIds.size;
+    if (!window.confirm(`Hapus ${count} akun yang dipilih? Aksi ini tidak dapat dibatalkan.`)) return;
+    let ok = 0, fail = 0;
+    for (const id of selectedCookieIds) {
+      try { await api.deleteCookie(id); ok++; } catch { fail++; }
+    }
+    setSelectedCookieIds(new Set());
+    if (ok > 0) setSuccessMsg(`${ok} akun berhasil dihapus${fail > 0 ? `, ${fail} gagal` : ''}.`);
+    else setErrorMsg(`Gagal menghapus semua akun yang dipilih.`);
+    loadDashboardData(true);
   };
 
   const handleTestCookie = async (id, email) => {
@@ -1734,7 +1752,7 @@ export default function Dashboard({ onLogout }) {
               ].map((f) => (
                 <button
                   key={f.id}
-                  onClick={() => setCookieFilter(f.id)}
+                  onClick={() => { setCookieFilter(f.id); setSelectedCookieIds(new Set()); }}
                   className={`px-3 py-1.5 rounded-lg font-semibold transition-colors shrink-0 cursor-pointer ${
                     cookieFilter === f.id
                       ? 'bg-slate-900 text-white shadow-xs'
@@ -1746,12 +1764,66 @@ export default function Dashboard({ onLogout }) {
               ))}
             </div>
 
+            {/* Bulk Action Bar — shown when any rows selected */}
+            {selectedCookieIds.size > 0 && (
+              <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-2xl px-4 py-2.5 text-xs animate-in fade-in">
+                <div className="flex items-center gap-2 text-blue-800 font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={selectedCookieIds.size === filteredCookies.length && filteredCookies.length > 0}
+                    onChange={() => {
+                      if (selectedCookieIds.size === filteredCookies.length) {
+                        setSelectedCookieIds(new Set());
+                      } else {
+                        setSelectedCookieIds(new Set(filteredCookies.map(c => c.id)));
+                      }
+                    }}
+                    className="w-4 h-4 rounded cursor-pointer accent-blue-600"
+                  />
+                  <span>{selectedCookieIds.size} akun dipilih</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setSelectedCookieIds(new Set())}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
+                  >
+                    Batalkan Pilihan
+                  </button>
+                  <button
+                    onClick={handleBulkDeleteCookies}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Hapus {selectedCookieIds.size} Akun
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Accounts Table */}
             <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-xs">
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
                     <tr>
+                      <th className="py-3 px-4 w-10">
+                        <input
+                          type="checkbox"
+                          title={selectedCookieIds.size === filteredCookies.length && filteredCookies.length > 0 ? 'Batalkan semua' : 'Pilih semua'}
+                          checked={filteredCookies.length > 0 && selectedCookieIds.size === filteredCookies.length}
+                          ref={el => {
+                            if (el) el.indeterminate = selectedCookieIds.size > 0 && selectedCookieIds.size < filteredCookies.length;
+                          }}
+                          onChange={() => {
+                            if (selectedCookieIds.size === filteredCookies.length) {
+                              setSelectedCookieIds(new Set());
+                            } else {
+                              setSelectedCookieIds(new Set(filteredCookies.map(c => c.id)));
+                            }
+                          }}
+                          className="w-4 h-4 rounded cursor-pointer accent-blue-600"
+                        />
+                      </th>
                       <th className="py-3 px-4">Profil Akun Google</th>
                       <th className="py-3 px-4">Email Akun (Gmail)</th>
                       <th className="py-3 px-4">Metode Otorisasi</th>
@@ -1770,9 +1842,28 @@ export default function Dashboard({ onLogout }) {
                       const displayName = (ck.account_name || ck.email || 'A').trim();
                       const initial = displayName ? displayName.charAt(0).toUpperCase() : 'A';
                       const avatarGradient = getProfileGradient(displayName);
+                      const isChecked = selectedCookieIds.has(ck.id);
 
                       return (
-                        <tr key={ck.id} className="hover:bg-slate-50/60 transition-colors">
+                        <tr
+                          key={ck.id}
+                          className={`hover:bg-slate-50/60 transition-colors ${isChecked ? 'bg-blue-50/40' : ''}`}
+                        >
+                          <td className="py-3.5 px-4">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {
+                                setSelectedCookieIds(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(ck.id)) next.delete(ck.id);
+                                  else next.add(ck.id);
+                                  return next;
+                                });
+                              }}
+                              className="w-4 h-4 rounded cursor-pointer accent-blue-600"
+                            />
+                          </td>
                           <td className="py-3.5 px-4 font-medium">
                             <div className="flex items-center gap-3">
                               {ck.oauth_picture ? (
@@ -1898,7 +1989,7 @@ export default function Dashboard({ onLogout }) {
 
                     {filteredCookies.length === 0 && (
                       <tr>
-                        <td colSpan="7" className="py-12 text-center text-xs text-slate-500">
+                        <td colSpan="8" className="py-12 text-center text-xs text-slate-500">
                           Belum ada akun Google terdaftar. Klik "+ Hubungkan Akun Google (OAuth 2.0)" di atas untuk menghubungkan akun.
                         </td>
                       </tr>
