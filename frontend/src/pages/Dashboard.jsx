@@ -119,6 +119,12 @@ function getProfileGradient(name = '') {
   return gradients[idx];
 }
 
+function formatUnixId(ts) {
+  const n = Number(ts);
+  if (!Number.isFinite(n) || n <= 0) return '-';
+  return new Date(n * 1000).toLocaleString('id-ID');
+}
+
 export default function Dashboard({ onLogout }) {
   const navigate = useNavigate();
 
@@ -1903,10 +1909,15 @@ export default function Dashboard({ onLogout }) {
 
                           <td className="py-3.5 px-4">
                             {isOAuth ? (
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                                <ShieldCheck className="w-3 h-3 text-blue-600" />
-                                Google OAuth 2.0
-                              </span>
+                              <div>
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                  <ShieldCheck className="w-3 h-3 text-blue-600" />
+                                  Google OAuth 2.0
+                                </span>
+                                <p className="text-[10px] text-slate-400 mt-1">
+                                  Berlaku s/d {formatUnixId(ck.oauth_account_expiry)}
+                                </p>
+                              </div>
                             ) : (
                               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
                                 <Cookie className="w-3 h-3 text-slate-500" />
@@ -2680,9 +2691,15 @@ export default function Dashboard({ onLogout }) {
                   </span>
                 </div>
                 <div className="grid grid-cols-3 gap-1 py-1 border-b border-slate-800">
-                  <span className="text-slate-400">Kadaluwarsa:</span>
+                  <span className="text-slate-400">Masa berlaku akun:</span>
                   <span className="col-span-2 text-slate-300">
-                    {snippetModalCookie.oauth_token_expiry ? new Date(snippetModalCookie.oauth_token_expiry * 1000).toLocaleString('id-ID') : 'Aktif'}
+                    {formatUnixId(snippetModalCookie.oauth_account_expiry)} (30 hari)
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-1 py-1 border-b border-slate-800">
+                  <span className="text-slate-400">Access token:</span>
+                  <span className="col-span-2 text-slate-300">
+                    {snippetModalCookie.oauth_token_expiry ? formatUnixId(snippetModalCookie.oauth_token_expiry) : 'Diperbarui otomatis'}
                   </span>
                 </div>
                 {snippetModalCookie.oauth_picture && (

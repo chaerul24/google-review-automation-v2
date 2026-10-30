@@ -11,6 +11,17 @@ from typing import Any, Dict, List, Optional
 
 DB_PATH = "reviews.db"
 
+# Connected Google account grant. Access tokens still expire in about 1 hour
+# (Google controls expires_in); this is how long the linked account stays usable.
+OAUTH_ACCOUNT_TTL_DAYS = 30
+OAUTH_ACCOUNT_TTL_SECONDS = OAUTH_ACCOUNT_TTL_DAYS * 24 * 60 * 60
+OAUTH_ACCOUNT_EXPIRED_REASON = (
+    "Masa berlaku akun Google OAuth (30 hari) telah berakhir. Hubungkan ulang akun."
+)
+OAUTH_ACCOUNT_ACTIVE_REASON = (
+    "Terverifikasi via Google OAuth 2.0. Masa berlaku akun 30 hari."
+)
+
 
 @contextmanager
 def get_db():
@@ -652,6 +663,10 @@ def get_pending_reviews(business_id):
                WHERE r.business_id = ? AND r.status = 'pending'
                  AND COALESCE(e.flagged, 0) = 0
                  AND (c.status = 'active' OR (e.password IS NOT NULL AND e.password != ''))
+                 AND NOT (
+                     COALESCE(c.status, '') = 'expired'
+                     AND (COALESCE(c.auth_method, e.auth_method, '') = 'oauth' OR e.password = 'oauth_auth')
+                 )
                ORDER BY r.created_at ASC""",
             (business_id,),
         ).fetchall()
@@ -721,7 +736,8 @@ def create_review_jobs(business_id, star_list, type_list=None, language_list=Non
         # Pull unflagged emails from pool that are not in active_or_done
         # Prioritize active cookies, deduplicate sessions, and shuffle randomly
         all_emails = conn.execute(
-            """SELECT e.id, e.email, e.password, c.cookie_json, c.status AS cookie_status
+            """SELECT e.id, e.email, e.password, c.cookie_json, c.status AS cookie_status,
+                      COALESCE(c.auth_method, e.auth_method, '') AS auth_method
                FROM emails e
                LEFT JOIN cookies c ON e.email = c.email
                WHERE COALESCE(e.flagged, 0) = 0"""
@@ -762,6 +778,12 @@ def create_review_jobs(business_id, star_list, type_list=None, language_list=Non
                 seen_sessions.add(sess_sig)
 
             has_pwd = bool(r.get("password") and str(r.get("password")).strip())
+            oauth_lapsed = (
+                r.get("cookie_status") == "expired"
+                and (r.get("auth_method") == "oauth" or str(r.get("password") or "") == "oauth_auth")
+            )
+            if oauth_lapsed:
+                continue
             if r.get("cookie_status") == "active":
                 active_cookie_ids.append(r["id"])
             elif has_pwd:
@@ -1195,6 +1217,7 @@ def enrich_cookies_with_duplicate_info(cookies_list):
 
 
 def get_all_cookies():
+    expire_lapsed_oauth_accounts()
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM cookies ORDER BY updated_at DESC"
@@ -1287,6 +1310,8 @@ def migrate_add_oauth_columns():
             conn.execute("ALTER TABLE cookies ADD COLUMN oauth_picture TEXT")
         if "oauth_token_expiry" not in ck_cols:
             conn.execute("ALTER TABLE cookies ADD COLUMN oauth_token_expiry REAL")
+        if "oauth_account_expiry" not in ck_cols:
+            conn.execute("ALTER TABLE cookies ADD COLUMN oauth_account_expiry REAL")
         if "account_name" not in ck_cols:
             conn.execute("ALTER TABLE cookies ADD COLUMN account_name TEXT")
 
@@ -1298,10 +1323,69 @@ def migrate_add_oauth_columns():
         if "account_name" not in em_cols:
             conn.execute("ALTER TABLE emails ADD COLUMN account_name TEXT")
 
+        # Existing linked accounts start a fresh 30-day window from this migration.
+        conn.execute(
+            """UPDATE cookies
+               SET oauth_account_expiry = ?
+               WHERE oauth_account_expiry IS NULL
+                 AND (auth_method = 'oauth' OR oauth_access_token IS NOT NULL)""",
+            (time.time() + OAUTH_ACCOUNT_TTL_SECONDS,),
+        )
+
+
+def oauth_account_expiry_timestamp(now=None):
+    """Unix time when a newly connected Google OAuth account must be re-authorized."""
+    base = time.time() if now is None else float(now)
+    return base + OAUTH_ACCOUNT_TTL_SECONDS
+
+
+def is_oauth_account_expired(expiry_ts, now=None):
+    """True when the 30-day Google account grant is in the past."""
+    if expiry_ts is None:
+        return False
+    try:
+        expiry = float(expiry_ts)
+    except (TypeError, ValueError):
+        return False
+    current = time.time() if now is None else float(now)
+    return expiry < current
+
+
+def expire_lapsed_oauth_accounts():
+    """Mark Google OAuth accounts past their 30-day grant as expired."""
+    try:
+        return _expire_lapsed_oauth_accounts()
+    except sqlite3.OperationalError:
+        migrate_add_oauth_columns()
+        return _expire_lapsed_oauth_accounts()
+
+
+def _expire_lapsed_oauth_accounts():
+    now = time.time()
+    with get_db() as conn:
+        cur = conn.execute(
+            """UPDATE cookies
+               SET status = 'expired',
+                   error_reason = ?,
+                   last_checked_at = CURRENT_TIMESTAMP
+               WHERE oauth_account_expiry IS NOT NULL
+                 AND oauth_account_expiry < ?
+                 AND COALESCE(status, '') != 'expired'
+                 AND (auth_method = 'oauth' OR oauth_access_token IS NOT NULL)""",
+            (OAUTH_ACCOUNT_EXPIRED_REASON, now),
+        )
+        return cur.rowcount
+
 
 def save_oauth_account(email, account_name, picture, access_token, refresh_token=None, expires_in=3600):
-    """Insert or update Google OAuth account in cookies and emails database."""
+    """Insert or update Google OAuth account in cookies and emails database.
+
+    oauth_token_expiry follows Google's access-token lifetime (about 1 hour).
+    oauth_account_expiry is the 30-day account grant and resets on each reconnect.
+    """
+    migrate_add_oauth_columns()
     expiry_ts = time.time() + float(expires_in or 3600)
+    account_expiry_ts = oauth_account_expiry_timestamp()
     with get_db() as conn:
         existing_ck = conn.execute("SELECT id, oauth_refresh_token, cookie_json FROM cookies WHERE email = ?", (email,)).fetchone()
         final_refresh = refresh_token
@@ -1316,19 +1400,20 @@ def save_oauth_account(email, account_name, picture, access_token, refresh_token
             conn.execute(
                 """UPDATE cookies 
                    SET account_name = ?, oauth_picture = ?, oauth_access_token = ?, 
-                       oauth_refresh_token = ?, oauth_token_expiry = ?, auth_method = 'oauth',
-                       status = 'active', error_reason = 'Terverifikasi via Google OAuth 2.0 Client',
+                       oauth_refresh_token = ?, oauth_token_expiry = ?, oauth_account_expiry = ?,
+                       auth_method = 'oauth',
+                       status = 'active', error_reason = ?,
                        last_checked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
                    WHERE email = ?""",
-                (account_name, picture, access_token, final_refresh, expiry_ts, email),
+                (account_name, picture, access_token, final_refresh, expiry_ts, account_expiry_ts, OAUTH_ACCOUNT_ACTIVE_REASON, email),
             )
         else:
             conn.execute(
                 """INSERT INTO cookies 
                    (email, cookie_json, status, account_name, oauth_picture, oauth_access_token, 
-                    oauth_refresh_token, oauth_token_expiry, auth_method, error_reason, last_checked_at)
-                   VALUES (?, ?, 'active', ?, ?, ?, ?, ?, 'oauth', 'Terverifikasi via Google OAuth 2.0 Client', CURRENT_TIMESTAMP)""",
-                (email, cookie_json, account_name, picture, access_token, final_refresh, expiry_ts),
+                    oauth_refresh_token, oauth_token_expiry, oauth_account_expiry, auth_method, error_reason, last_checked_at)
+                   VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, 'oauth', ?, CURRENT_TIMESTAMP)""",
+                (email, cookie_json, account_name, picture, access_token, final_refresh, expiry_ts, account_expiry_ts, OAUTH_ACCOUNT_ACTIVE_REASON),
             )
 
         # Also sync to emails table for review job queue

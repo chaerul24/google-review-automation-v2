@@ -703,7 +703,9 @@ def api_cli_reviews_by_account():
 def api_cli_check_cookie_names():
     """Verify stored cookies live against Google and retrieve real Account Names."""
     with db.get_db() as conn:
-        cookies = conn.execute("SELECT id, email, cookie_json, auth_method, oauth_access_token, oauth_refresh_token, account_name FROM cookies ORDER BY id ASC").fetchall()
+        cookies = conn.execute(
+            "SELECT id, email, cookie_json, auth_method, oauth_access_token, oauth_refresh_token, oauth_account_expiry, account_name FROM cookies ORDER BY id ASC"
+        ).fetchall()
 
     results = []
     active_count = 0
@@ -717,35 +719,40 @@ def api_cli_check_cookie_names():
             acc_tok = row["oauth_access_token"]
             ref_tok = row["oauth_refresh_token"]
             acc_name = row["account_name"] or email.split("@")[0]
-            st_val = "active"
-            reason = "Akun Google OAuth 2.0 Client terverifikasi aktif."
-            try:
-                chk = requests.get(f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={acc_tok}", timeout=5)
-                if chk.status_code == 200:
-                    st_val = "active"
-                elif ref_tok:
-                    client_id = os.environ.get("GOOGLE_CLIENT_ID") or GOOGLE_OAUTH_CLIENT_ID
-                    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET") or GOOGLE_OAUTH_CLIENT_SECRET
-                    ref_res = requests.post(
-                        "https://oauth2.googleapis.com/token",
-                        data={"client_id": client_id, "client_secret": client_secret, "refresh_token": ref_tok, "grant_type": "refresh_token"},
-                        timeout=5
-                    )
-                    if ref_res.status_code == 200:
-                        new_tok = ref_res.json().get("access_token")
-                        with db.get_db() as conn:
-                            conn.execute("UPDATE cookies SET oauth_access_token = ? WHERE id = ?", (new_tok, cid))
+            blocked_status, blocked_reason = _oauth_grant_blocked(row)
+            if blocked_status:
+                st_val = blocked_status
+                reason = blocked_reason
+            else:
+                st_val = "active"
+                reason = "Akun Google OAuth 2.0 Client terverifikasi aktif."
+                try:
+                    chk = requests.get(f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={acc_tok}", timeout=5)
+                    if chk.status_code == 200:
                         st_val = "active"
-                        reason = "Token OAuth diperbarui via Refresh Token."
+                    elif ref_tok:
+                        client_id = os.environ.get("GOOGLE_CLIENT_ID") or GOOGLE_OAUTH_CLIENT_ID
+                        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET") or GOOGLE_OAUTH_CLIENT_SECRET
+                        ref_res = requests.post(
+                            "https://oauth2.googleapis.com/token",
+                            data={"client_id": client_id, "client_secret": client_secret, "refresh_token": ref_tok, "grant_type": "refresh_token"},
+                            timeout=5
+                        )
+                        if ref_res.status_code == 200:
+                            new_tok = ref_res.json().get("access_token")
+                            with db.get_db() as conn:
+                                conn.execute("UPDATE cookies SET oauth_access_token = ? WHERE id = ?", (new_tok, cid))
+                            st_val = "active"
+                            reason = "Token OAuth diperbarui via Refresh Token."
+                        else:
+                            st_val = "needs_login"
+                            reason = "Sesi OAuth kedaluwarsa. Perlu hubungkan ulang."
                     else:
                         st_val = "needs_login"
                         reason = "Sesi OAuth kedaluwarsa. Perlu hubungkan ulang."
-                else:
+                except Exception as e:
                     st_val = "needs_login"
-                    reason = "Sesi OAuth kedaluwarsa. Perlu hubungkan ulang."
-            except Exception as e:
-                st_val = "needs_login"
-                reason = f"Gagal verifikasi token: {e}"
+                    reason = f"Gagal verifikasi token: {e}"
 
             if st_val == "active":
                 active_count += 1
@@ -1129,6 +1136,17 @@ GOOGLE_OAUTH_REDIRECT_URI = os.environ.get(
 )
 
 
+def _oauth_grant_blocked(row):
+    """Return (status, reason) when the 30-day Google account grant has lapsed."""
+    try:
+        expiry = row["oauth_account_expiry"]
+    except (KeyError, IndexError, TypeError):
+        expiry = None
+    if db.is_oauth_account_expired(expiry):
+        return "expired", db.OAUTH_ACCOUNT_EXPIRED_REASON
+    return None, None
+
+
 @app.route("/auth/google")
 def auth_google():
     """Start Google OAuth 2.0 authorization flow to connect account."""
@@ -1247,7 +1265,7 @@ def auth_google_callback():
 
     db.log_autobotix_activity(
         "oauth", "google_oauth_connect", email, "success",
-        f"Akun Google {email} ({name}) berhasil terhubung via Google OAuth 2.0 Client."
+        f"Akun Google {email} ({name}) berhasil terhubung via Google OAuth 2.0. Masa berlaku akun 30 hari."
     )
 
     # Ensure admin session is active
@@ -3200,46 +3218,50 @@ def test_cookie(cookie_id):
         st_val = "needs_login"
         reason = "Memeriksa status sesi OAuth Google..."
         acc_name = target.get("account_name") or email.split("@")[0]
-        
-        try:
-            chk = requests.get(f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={access_tok}", timeout=8)
-            if chk.status_code == 200:
-                st_val = "active"
-                reason = "Sesi Google OAuth 2.0 Client aktif dan terverifikasi."
-            elif refresh_tok:
-                # Attempt automatic refresh
-                client_id = os.environ.get("GOOGLE_CLIENT_ID") or GOOGLE_OAUTH_CLIENT_ID
-                client_secret = os.environ.get("GOOGLE_CLIENT_SECRET") or GOOGLE_OAUTH_CLIENT_SECRET
-                ref_res = requests.post(
-                    "https://oauth2.googleapis.com/token",
-                    data={
-                        "client_id": client_id,
-                        "client_secret": client_secret,
-                        "refresh_token": refresh_tok,
-                        "grant_type": "refresh_token",
-                    },
-                    timeout=10,
-                )
-                if ref_res.status_code == 200:
-                    ref_data = ref_res.json()
-                    new_acc_tok = ref_data.get("access_token")
-                    expires_in = ref_data.get("expires_in", 3600)
-                    with db.get_db() as conn:
-                        conn.execute(
-                            "UPDATE cookies SET oauth_access_token = ?, oauth_token_expiry = ? WHERE id = ?",
-                            (new_acc_tok, time.time() + expires_in, cookie_id),
-                        )
+        blocked_status, blocked_reason = _oauth_grant_blocked(target)
+
+        if blocked_status:
+            st_val = blocked_status
+            reason = blocked_reason
+        else:
+            try:
+                chk = requests.get(f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={access_tok}", timeout=8)
+                if chk.status_code == 200:
                     st_val = "active"
-                    reason = "Token Google OAuth 2.0 berhasil diperbarui via Refresh Token."
+                    reason = "Sesi Google OAuth 2.0 Client aktif dan terverifikasi."
+                elif refresh_tok:
+                    client_id = os.environ.get("GOOGLE_CLIENT_ID") or GOOGLE_OAUTH_CLIENT_ID
+                    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET") or GOOGLE_OAUTH_CLIENT_SECRET
+                    ref_res = requests.post(
+                        "https://oauth2.googleapis.com/token",
+                        data={
+                            "client_id": client_id,
+                            "client_secret": client_secret,
+                            "refresh_token": refresh_tok,
+                            "grant_type": "refresh_token",
+                        },
+                        timeout=10,
+                    )
+                    if ref_res.status_code == 200:
+                        ref_data = ref_res.json()
+                        new_acc_tok = ref_data.get("access_token")
+                        expires_in = ref_data.get("expires_in", 3600)
+                        with db.get_db() as conn:
+                            conn.execute(
+                                "UPDATE cookies SET oauth_access_token = ?, oauth_token_expiry = ? WHERE id = ?",
+                                (new_acc_tok, time.time() + expires_in, cookie_id),
+                            )
+                        st_val = "active"
+                        reason = "Token Google OAuth 2.0 berhasil diperbarui via Refresh Token."
+                    else:
+                        st_val = "needs_login"
+                        reason = "Sesi OAuth kedaluwarsa. Silakan hubungkan ulang akun Google."
                 else:
                     st_val = "needs_login"
-                    reason = "Sesi OAuth kedaluwarsa. Silakan hubungkan ulang akun Google."
-            else:
+                    reason = "Token OAuth kedaluwarsa. Silakan hubungkan ulang akun Google."
+            except Exception as exc:
                 st_val = "needs_login"
-                reason = "Token OAuth kedaluwarsa. Silakan hubungkan ulang akun Google."
-        except Exception as exc:
-            st_val = "needs_login"
-            reason = f"Gagal verifikasi token OAuth: {exc}"
+                reason = f"Gagal verifikasi token OAuth: {exc}"
 
         with db.get_db() as conn:
             conn.execute(
