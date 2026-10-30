@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import WorkerApp from './pages/WorkerApp';
 import { api } from './api/client';
 
 export default function App() {
@@ -51,17 +50,6 @@ export default function App() {
           element={
             isAuthenticated ? (
               <Dashboard onLogout={() => setIsAuthenticated(false)} />
-            ) : (
-              <Navigate to="/login" replace />
-            )
-          }
-        />
-
-        <Route
-          path="/worker"
-          element={
-            isAuthenticated ? (
-              <WorkerApp onLogout={() => setIsAuthenticated(false)} />
             ) : (
               <Navigate to="/login" replace />
             )

@@ -20,6 +20,8 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from functools import wraps
 from urllib.parse import urlparse, quote_plus
+import urllib.parse
+import requests
 
 from dotenv import load_dotenv
 from flask import (
@@ -701,7 +703,7 @@ def api_cli_reviews_by_account():
 def api_cli_check_cookie_names():
     """Verify stored cookies live against Google and retrieve real Account Names."""
     with db.get_db() as conn:
-        cookies = conn.execute("SELECT id, email, cookie_json FROM cookies ORDER BY id ASC").fetchall()
+        cookies = conn.execute("SELECT id, email, cookie_json, auth_method, oauth_access_token, oauth_refresh_token, account_name FROM cookies ORDER BY id ASC").fetchall()
 
     results = []
     active_count = 0
@@ -709,6 +711,68 @@ def api_cli_check_cookie_names():
         cid = row["id"]
         email = row["email"]
         c_json = row["cookie_json"]
+
+        # OAuth accounts check
+        if row["auth_method"] == "oauth" or row["oauth_access_token"]:
+            acc_tok = row["oauth_access_token"]
+            ref_tok = row["oauth_refresh_token"]
+            acc_name = row["account_name"] or email.split("@")[0]
+            st_val = "active"
+            reason = "Akun Google OAuth 2.0 Client terverifikasi aktif."
+            try:
+                chk = requests.get(f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={acc_tok}", timeout=5)
+                if chk.status_code == 200:
+                    st_val = "active"
+                elif ref_tok:
+                    client_id = os.environ.get("GOOGLE_CLIENT_ID") or GOOGLE_OAUTH_CLIENT_ID
+                    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET") or GOOGLE_OAUTH_CLIENT_SECRET
+                    ref_res = requests.post(
+                        "https://oauth2.googleapis.com/token",
+                        data={"client_id": client_id, "client_secret": client_secret, "refresh_token": ref_tok, "grant_type": "refresh_token"},
+                        timeout=5
+                    )
+                    if ref_res.status_code == 200:
+                        new_tok = ref_res.json().get("access_token")
+                        with db.get_db() as conn:
+                            conn.execute("UPDATE cookies SET oauth_access_token = ? WHERE id = ?", (new_tok, cid))
+                        st_val = "active"
+                        reason = "Token OAuth diperbarui via Refresh Token."
+                    else:
+                        st_val = "needs_login"
+                        reason = "Sesi OAuth kedaluwarsa. Perlu hubungkan ulang."
+                else:
+                    st_val = "needs_login"
+                    reason = "Sesi OAuth kedaluwarsa. Perlu hubungkan ulang."
+            except Exception as e:
+                st_val = "needs_login"
+                reason = f"Gagal verifikasi token: {e}"
+
+            if st_val == "active":
+                active_count += 1
+
+            with db.get_db() as conn:
+                conn.execute(
+                    """UPDATE cookies
+                       SET status = ?, account_name = ?, last_checked_at = CURRENT_TIMESTAMP, error_reason = ?
+                       WHERE id = ?""",
+                    (st_val, acc_name, reason, cid),
+                )
+                conn.execute(
+                    """UPDATE emails
+                       SET account_name = ?, flagged = (CASE WHEN ? = 'active' THEN 0 ELSE flagged END)
+                       WHERE email = ?""",
+                    (acc_name, st_val, email),
+                )
+
+            results.append({
+                "id": cid,
+                "email": email,
+                "account_name": acc_name,
+                "status": st_val,
+                "reason": reason,
+                "auth_method": "oauth"
+            })
+            continue
 
         live = session_manager.check_google_account_live(c_json, fallback_email=email)
         acc_name = live.get("account_name") or ""
@@ -950,9 +1014,25 @@ def _login_limited(remote_addr):
     return len(attempts) >= _LOGIN_MAX_ATTEMPTS
 
 
+def normalize_target_url(value: str) -> str:
+    val = (value or "").strip()
+    if not val:
+        return ""
+    if val.startswith("@"):
+        return f"https://www.tiktok.com/{val}/live"
+    if val.startswith("tiktok.com/"):
+        return f"https://www.{val}"
+    if not val.startswith("http://") and not val.startswith("https://"):
+        if "tiktok.com" in val:
+            return f"https://{val}"
+        return f"https://{val}"
+    return val
+
+
 def _valid_business_url(value):
-    parsed = urlparse(value)
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc) and len(value) <= 2048
+    val = normalize_target_url(value)
+    parsed = urlparse(val)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc) and len(val) <= 2048
 
 
 # ── Auth routes ───────────────────────────────────────────────────────────────
@@ -1037,6 +1117,148 @@ def logout():
 def api_logout():
     session.clear()
     return jsonify({"status": "ok", "authenticated": False})
+
+
+# ── Google OAuth 2.0 Client ───────────────────────────────────────────────────
+
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_OAUTH_REDIRECT_URI = os.environ.get(
+    "GOOGLE_REDIRECT_URI",
+    "https://autobotix.my.id/auth/google/callback"
+)
+
+
+@app.route("/auth/google")
+def auth_google():
+    """Start Google OAuth 2.0 authorization flow to connect account."""
+    client_id = os.environ.get("GOOGLE_CLIENT_ID") or GOOGLE_OAUTH_CLIENT_ID
+    redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI") or GOOGLE_OAUTH_REDIRECT_URI
+    state_token = secrets.token_urlsafe(24)
+    session["google_oauth_state"] = state_token
+
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "offline",
+        "prompt": "select_account",
+        "include_granted_scopes": "true",
+        "state": state_token,
+    }
+    auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
+    return redirect(auth_url)
+
+
+@app.route("/api/auth/google/url")
+def api_auth_google_url():
+    """API endpoint providing the Google OAuth redirect URL."""
+    client_id = os.environ.get("GOOGLE_CLIENT_ID") or GOOGLE_OAUTH_CLIENT_ID
+    redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI") or GOOGLE_OAUTH_REDIRECT_URI
+    state_token = secrets.token_urlsafe(24)
+    session["google_oauth_state"] = state_token
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "offline",
+        "prompt": "select_account",
+        "include_granted_scopes": "true",
+        "state": state_token,
+    }
+    auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
+    return jsonify({
+        "status": "ok",
+        "auth_url": auth_url,
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+    })
+
+
+@app.route("/auth/google/callback")
+def auth_google_callback():
+    """Callback receiver for Google OAuth 2.0 flow."""
+    error = request.args.get("error")
+    if error:
+        err_msg = request.args.get("error_description") or f"Otorisasi Google dibatalkan ({error})"
+        return redirect(f"/dashboard?oauth_error={urllib.parse.quote(err_msg)}")
+
+    code = request.args.get("code")
+    if not code:
+        return redirect(f"/dashboard?oauth_error={urllib.parse.quote('Kode otorisasi tidak diterima dari Google.')}")
+
+    client_id = os.environ.get("GOOGLE_CLIENT_ID") or GOOGLE_OAUTH_CLIENT_ID
+    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET") or GOOGLE_OAUTH_CLIENT_SECRET
+    redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI") or GOOGLE_OAUTH_REDIRECT_URI
+
+    # Exchange authorization code for tokens
+    token_url = "https://oauth2.googleapis.com/token"
+    token_payload = {
+        "code": code,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }
+
+    try:
+        t_res = requests.post(token_url, data=token_payload, headers={"User-Agent": "AutoBotix-SaaS/1.0"}, timeout=20)
+        token_data = t_res.json()
+    except Exception as exc:
+        return redirect(f"/dashboard?oauth_error={urllib.parse.quote(f'Koneksi ke Google Token Endpoint gagal: {exc}')}")
+
+    if t_res.status_code != 200:
+        err_desc = token_data.get("error_description") or token_data.get("error") or "Gagal menukar kode otorisasi Google"
+        return redirect(f"/dashboard?oauth_error={urllib.parse.quote(err_desc)}")
+
+    access_token = token_data.get("access_token")
+    refresh_token = token_data.get("refresh_token")
+    expires_in = token_data.get("expires_in", 3600)
+
+    # Fetch User Profile from Google
+    try:
+        u_res = requests.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=15,
+        )
+        userinfo = u_res.json()
+    except Exception as exc:
+        return redirect(f"/dashboard?oauth_error={urllib.parse.quote(f'Gagal mengambil profil akun Google: {exc}')}")
+
+    email = (userinfo.get("email") or "").strip().lower()
+    name = (userinfo.get("name") or "").strip()
+    picture = userinfo.get("picture") or ""
+
+    if not email:
+        return redirect(f"/dashboard?oauth_error={urllib.parse.quote('Email Google tidak terdeteksi dari profil.')}")
+
+    # Save to database
+    db.save_oauth_account(
+        email=email,
+        account_name=name or email.split("@")[0],
+        picture=picture,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=expires_in,
+    )
+
+    db.log_autobotix_activity(
+        "oauth", "google_oauth_connect", email, "success",
+        f"Akun Google {email} ({name}) berhasil terhubung via Google OAuth 2.0 Client."
+    )
+
+    # Ensure admin session is active
+    session.permanent = True
+    session["logged_in"] = True
+    if not session.get("role"):
+        session["role"] = "administrator"
+
+    return redirect(
+        f"/dashboard?oauth_success=1&email={urllib.parse.quote(email)}&name={urllib.parse.quote(name)}"
+    )
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -1761,7 +1983,7 @@ def import_autobotix_snapshot():
 @login_required
 def add_business():
     name = request.form.get("name", "").strip()
-    url = request.form.get("url", "").strip()
+    url = normalize_target_url(request.form.get("url", "").strip())
     if name and _valid_business_url(url):
         db.add_business(name, url)
     return redirect(url_for("dashboard"))
@@ -1772,9 +1994,9 @@ def add_business():
 def api_add_business():
     data = request.get_json(silent=True) or request.form
     name = (data.get("name") or "").strip()
-    url = (data.get("url") or "").strip()
+    url = normalize_target_url((data.get("url") or "").strip())
     if not name or not _valid_business_url(url):
-        return jsonify({"status": "error", "message": "Nama atau URL Google Maps tidak valid."}), 400
+        return jsonify({"status": "error", "message": "Nama atau URL TikTok LIVE tidak valid."}), 400
     biz_id = db.add_business(name, url)
     return jsonify({"status": "ok", "business_id": biz_id, "url": url})
 
@@ -2677,18 +2899,18 @@ def api_add_cookie():
         return jsonify({"status": "error", "message": f"Format cookie tidak valid: {val.reason}"}), 400
 
     input_email = (data.get("cookie_email") or data.get("email") or data.get("account_name") or "").strip()
-    placeholder_email = val.detected_email or f"google.session.{int(time.time()) % 10000:04d}@gmail.com"
+    placeholder_email = val.detected_email or f"tiktok.bot.{int(time.time()) % 10000:04d}"
     check_email = input_email or placeholder_email
 
-    # Live check with Google to retrieve real account name, email, and session status
-    live = session_manager.check_google_account_live(cookie_raw, fallback_email=check_email)
+    # Live check with TikTok/Google to retrieve real account name, email, and session status
+    live = session_manager.check_account_live(cookie_raw, fallback_account=check_email)
     account_name = input_email or live.get("account_name") or ""
     session_status = live.get("status") or val.status.value
     detected_real_email = live.get("real_email") or live.get("email")
 
     if input_email:
         email = input_email
-    elif detected_real_email and not detected_real_email.startswith("google.session."):
+    elif detected_real_email and not detected_real_email.startswith("tiktok.bot."):
         email = detected_real_email
     else:
         email = placeholder_email
@@ -2970,7 +3192,82 @@ def test_cookie(cookie_id):
         return jsonify({"status": "error", "message": "Cookie tidak ditemukan."}), 404
 
     email = target["email"]
-    live = session_manager.check_google_account_live(target["cookie_json"], fallback_email=email)
+
+    # Special handling for Google OAuth 2.0 Accounts
+    if target.get("auth_method") == "oauth" or target.get("oauth_access_token"):
+        access_tok = target.get("oauth_access_token")
+        refresh_tok = target.get("oauth_refresh_token")
+        st_val = "needs_login"
+        reason = "Memeriksa status sesi OAuth Google..."
+        acc_name = target.get("account_name") or email.split("@")[0]
+        
+        try:
+            chk = requests.get(f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={access_tok}", timeout=8)
+            if chk.status_code == 200:
+                st_val = "active"
+                reason = "Sesi Google OAuth 2.0 Client aktif dan terverifikasi."
+            elif refresh_tok:
+                # Attempt automatic refresh
+                client_id = os.environ.get("GOOGLE_CLIENT_ID") or GOOGLE_OAUTH_CLIENT_ID
+                client_secret = os.environ.get("GOOGLE_CLIENT_SECRET") or GOOGLE_OAUTH_CLIENT_SECRET
+                ref_res = requests.post(
+                    "https://oauth2.googleapis.com/token",
+                    data={
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "refresh_token": refresh_tok,
+                        "grant_type": "refresh_token",
+                    },
+                    timeout=10,
+                )
+                if ref_res.status_code == 200:
+                    ref_data = ref_res.json()
+                    new_acc_tok = ref_data.get("access_token")
+                    expires_in = ref_data.get("expires_in", 3600)
+                    with db.get_db() as conn:
+                        conn.execute(
+                            "UPDATE cookies SET oauth_access_token = ?, oauth_token_expiry = ? WHERE id = ?",
+                            (new_acc_tok, time.time() + expires_in, cookie_id),
+                        )
+                    st_val = "active"
+                    reason = "Token Google OAuth 2.0 berhasil diperbarui via Refresh Token."
+                else:
+                    st_val = "needs_login"
+                    reason = "Sesi OAuth kedaluwarsa. Silakan hubungkan ulang akun Google."
+            else:
+                st_val = "needs_login"
+                reason = "Token OAuth kedaluwarsa. Silakan hubungkan ulang akun Google."
+        except Exception as exc:
+            st_val = "needs_login"
+            reason = f"Gagal verifikasi token OAuth: {exc}"
+
+        with db.get_db() as conn:
+            conn.execute(
+                """UPDATE cookies
+                   SET status = ?, last_checked_at = CURRENT_TIMESTAMP, error_reason = ?
+                   WHERE id = ?""",
+                (st_val, reason, cookie_id),
+            )
+            conn.execute(
+                """UPDATE emails
+                   SET flagged = (CASE WHEN ? = 'active' THEN 0 ELSE flagged END)
+                   WHERE email = ?""",
+                (st_val, email),
+            )
+
+        return jsonify({
+            "status": "ok",
+            "email": email,
+            "account_name": acc_name,
+            "is_valid": (st_val == "active"),
+            "session_status": st_val,
+            "reason": reason,
+            "auth_method": "oauth",
+            "count": 1,
+            "names": ["oauth_access_token", "oauth_refresh_token"],
+        })
+
+    live = session_manager.check_account_live(target["cookie_json"], fallback_account=email)
     st_val = live.get("status") or "needs_login"
     acc_name = live.get("account_name") or ""
     reason = live.get("reason") or ""
@@ -3582,6 +3879,7 @@ if __name__ == "__main__":
     db.migrate_add_email_fail_tracking()
     db.migrate_add_cookies_table()
     db.migrate_add_cookie_session_columns()
+    db.migrate_add_oauth_columns()
     db.migrate_add_process_logs_table()
     #app.run(debug=True, port=5000)
     app.run(host="0.0.0.0", port=5000, debug=False)

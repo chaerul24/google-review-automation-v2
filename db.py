@@ -1269,6 +1269,83 @@ def migrate_add_cookie_session_columns():
             conn.execute("ALTER TABLE cookies ADD COLUMN last_checked_at TIMESTAMP")
         if "error_reason" not in cols:
             conn.execute("ALTER TABLE cookies ADD COLUMN error_reason TEXT")
+    migrate_add_oauth_columns()
+
+
+def migrate_add_oauth_columns():
+    """Add Google OAuth 2.0 client columns to cookies and emails tables."""
+    with get_db() as conn:
+        ck_cols = [r[1] for r in conn.execute("PRAGMA table_info(cookies)").fetchall()]
+        if "auth_method" not in ck_cols:
+            conn.execute("ALTER TABLE cookies ADD COLUMN auth_method TEXT DEFAULT 'cookie'")
+        if "oauth_access_token" not in ck_cols:
+            conn.execute("ALTER TABLE cookies ADD COLUMN oauth_access_token TEXT")
+        if "oauth_refresh_token" not in ck_cols:
+            conn.execute("ALTER TABLE cookies ADD COLUMN oauth_refresh_token TEXT")
+        if "oauth_picture" not in ck_cols:
+            conn.execute("ALTER TABLE cookies ADD COLUMN oauth_picture TEXT")
+        if "oauth_token_expiry" not in ck_cols:
+            conn.execute("ALTER TABLE cookies ADD COLUMN oauth_token_expiry REAL")
+        if "account_name" not in ck_cols:
+            conn.execute("ALTER TABLE cookies ADD COLUMN account_name TEXT")
+
+        em_cols = [r[1] for r in conn.execute("PRAGMA table_info(emails)").fetchall()]
+        if "auth_method" not in em_cols:
+            conn.execute("ALTER TABLE emails ADD COLUMN auth_method TEXT DEFAULT 'cookie'")
+        if "oauth_picture" not in em_cols:
+            conn.execute("ALTER TABLE emails ADD COLUMN oauth_picture TEXT")
+        if "account_name" not in em_cols:
+            conn.execute("ALTER TABLE emails ADD COLUMN account_name TEXT")
+
+
+def save_oauth_account(email, account_name, picture, access_token, refresh_token=None, expires_in=3600):
+    """Insert or update Google OAuth account in cookies and emails database."""
+    expiry_ts = time.time() + float(expires_in or 3600)
+    with get_db() as conn:
+        existing_ck = conn.execute("SELECT id, oauth_refresh_token, cookie_json FROM cookies WHERE email = ?", (email,)).fetchone()
+        final_refresh = refresh_token
+        if not final_refresh and existing_ck and existing_ck["oauth_refresh_token"]:
+            final_refresh = existing_ck["oauth_refresh_token"]
+
+        cookie_json = existing_ck["cookie_json"] if (existing_ck and existing_ck["cookie_json"]) else json.dumps([
+            {"name": "oauth_account", "value": email, "domain": ".google.com"}
+        ])
+
+        if existing_ck:
+            conn.execute(
+                """UPDATE cookies 
+                   SET account_name = ?, oauth_picture = ?, oauth_access_token = ?, 
+                       oauth_refresh_token = ?, oauth_token_expiry = ?, auth_method = 'oauth',
+                       status = 'active', error_reason = 'Terverifikasi via Google OAuth 2.0 Client',
+                       last_checked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                   WHERE email = ?""",
+                (account_name, picture, access_token, final_refresh, expiry_ts, email),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO cookies 
+                   (email, cookie_json, status, account_name, oauth_picture, oauth_access_token, 
+                    oauth_refresh_token, oauth_token_expiry, auth_method, error_reason, last_checked_at)
+                   VALUES (?, ?, 'active', ?, ?, ?, ?, ?, 'oauth', 'Terverifikasi via Google OAuth 2.0 Client', CURRENT_TIMESTAMP)""",
+                (email, cookie_json, account_name, picture, access_token, final_refresh, expiry_ts),
+            )
+
+        # Also sync to emails table for review job queue
+        existing_em = conn.execute("SELECT id FROM emails WHERE email = ?", (email,)).fetchone()
+        if existing_em:
+            conn.execute(
+                """UPDATE emails 
+                   SET account_name = ?, oauth_picture = ?, auth_method = 'oauth', flagged = 0, fail_count = 0
+                   WHERE email = ?""",
+                (account_name, picture, email),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO emails (email, password, account_name, oauth_picture, auth_method, flagged, fail_count)
+                   VALUES (?, 'oauth_auth', ?, ?, 'oauth', 0, 0)""",
+                (email, account_name, picture),
+            )
+    return True
 
 
 def update_cookie_session_status(email, status, error_reason=None):

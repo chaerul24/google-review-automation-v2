@@ -34,7 +34,6 @@ import {
   HardDrive,
   Layers,
   Tv,
-  Monitor,
   BarChart3,
   PieChart,
   TrendingUp,
@@ -42,12 +41,12 @@ import {
   Flame,
   CheckCheck,
   Radio,
-  ArrowUpRight,
   Info,
   User,
   Pencil,
   FlaskConical,
-  Loader2
+  Loader2,
+  KeyRound
 } from 'lucide-react';
 import { api } from '../api/client';
 
@@ -216,6 +215,20 @@ export default function Dashboard({ onLogout }) {
   };
 
   useEffect(() => {
+    // Check for Google OAuth callback parameters
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('oauth_success')) {
+      const em = params.get('email') || 'Akun Google';
+      const nm = params.get('name') || '';
+      setSuccessMsg(`✓ Berhasil menghubungkan akun Google: ${em}${nm ? ` (${nm})` : ''} via Google OAuth 2.0 Client!`);
+      setActiveTab('cookies');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (params.get('oauth_error')) {
+      setErrorMsg(`▲ Gagal otorisasi Google OAuth: ${params.get('oauth_error')}`);
+      setActiveTab('cookies');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
     loadDashboardData();
     const interval = setInterval(() => {
       loadDashboardData(true);
@@ -702,8 +715,8 @@ export default function Dashboard({ onLogout }) {
               }`}
             >
               <div className="flex items-center gap-3">
-                <Cookie className={`w-4 h-4 ${activeTab === 'cookies' ? 'text-emerald-400' : 'text-slate-400'}`} />
-                <span>Manajemen Cookie Sesi</span>
+                <ShieldCheck className={`w-4 h-4 ${activeTab === 'cookies' ? 'text-emerald-400' : 'text-slate-400'}`} />
+                <span>Akun Google (OAuth)</span>
               </div>
             </button>
 
@@ -735,16 +748,6 @@ export default function Dashboard({ onLogout }) {
               </div>
             </button>
 
-            <button
-              onClick={() => navigate('/worker')}
-              className="w-full flex items-center justify-between px-4 py-3 rounded-none text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all cursor-pointer group"
-            >
-              <div className="flex items-center gap-3">
-                <Monitor className="w-4 h-4 text-cyan-400 group-hover:scale-110 transition-transform" />
-                <span>Multi-Screen Viewer</span>
-              </div>
-              <ArrowUpRight className="w-3.5 h-3.5 text-slate-400" />
-            </button>
           </div>
         </div>
 
@@ -801,7 +804,7 @@ export default function Dashboard({ onLogout }) {
             <div className="min-w-0">
               <h1 className="text-sm sm:text-base lg:text-lg font-bold text-slate-900 tracking-tight truncate">
                 {activeTab === 'overview' && 'Executive Dashboard'}
-                {activeTab === 'cookies' && 'Manajemen Cookie Sesi'}
+                {activeTab === 'cookies' && 'Manajemen Akun Google (Google OAuth 2.0 Client)'}
                 {activeTab === 'server' && 'Manajemen Server'}
                 {activeTab === 'businesses' && 'Target Bisnis Maps'}
               </h1>
@@ -959,24 +962,24 @@ export default function Dashboard({ onLogout }) {
           <main className="p-4 sm:p-6 space-y-6">
             {/* Top 4 KPI Metrics */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {/* Card 1: Manajemen Cookie Sesi */}
+              {/* Card 1: Akun Google OAuth */}
               <div 
                 onClick={() => setActiveTab('cookies')}
-                className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs hover:border-emerald-400 hover:shadow-sm transition-all cursor-pointer group"
+                className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs hover:border-blue-400 hover:shadow-sm transition-all cursor-pointer group"
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-emerald-700 transition-colors">
-                    Manajemen Cookie Sesi
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-blue-700 transition-colors">
+                    Akun Google (OAuth)
                   </span>
-                  <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center group-hover:bg-emerald-600 group-hover:text-white transition-colors">
-                    <Cookie className="w-4 h-4" />
+                  <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                    <GmailLogo className="w-4 h-4" />
                   </div>
                 </div>
                 <div className="mt-3 flex items-baseline gap-2">
-                  <span className="text-3xl font-extrabold text-slate-900 font-mono tracking-tight group-hover:text-emerald-700 transition-colors">
+                  <span className="text-3xl font-extrabold text-slate-900 font-mono tracking-tight group-hover:text-blue-700 transition-colors">
                     {cookies.length}
                   </span>
-                  <span className="text-xs text-slate-500 font-medium">Akun Google Terhubung</span>
+                  <span className="text-xs text-slate-500 font-medium">Akun Terdaftar</span>
                 </div>
                 <div className="mt-3 flex items-center justify-between text-xs text-slate-600">
                   <span className="flex items-center gap-1.5">
@@ -984,21 +987,21 @@ export default function Dashboard({ onLogout }) {
                     <span>{activeCookiesCount} Sesi Aktif</span>
                   </span>
                   {needsLoginCookiesCount > 0 && (
-                    <span className="text-amber-600 font-semibold">{needsLoginCookiesCount} Perlu Login</span>
+                    <span className="text-amber-600 font-semibold">{needsLoginCookiesCount} Perlu Re-Auth</span>
                   )}
                 </div>
               </div>
 
-              {/* Card 2: Status Cookie Sesi */}
+              {/* Card 2: Status Akun Google */}
               <div 
                 onClick={() => setActiveTab('cookies')}
-                className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs hover:border-blue-400 hover:shadow-sm transition-all cursor-pointer group"
+                className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs hover:border-emerald-400 hover:shadow-sm transition-all cursor-pointer group"
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-blue-700 transition-colors">
-                    Status Cookie Google
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-emerald-700 transition-colors">
+                    Status Akun Google
                   </span>
-                  <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center group-hover:bg-emerald-600 group-hover:text-white transition-colors">
                     <ShieldCheck className="w-4 h-4" />
                   </div>
                 </div>
@@ -1010,7 +1013,7 @@ export default function Dashboard({ onLogout }) {
                 </div>
                 <div className="mt-3 flex items-center justify-between text-xs text-slate-600">
                   <span className="text-amber-600 font-medium">
-                    {needsLoginCookiesCount} Perlu Login
+                    {needsLoginCookiesCount} Perlu Re-Auth
                   </span>
                   <span className="text-rose-600 font-medium">
                     {expiredCookiesCount} Kedaluwarsa
@@ -1037,29 +1040,32 @@ export default function Dashboard({ onLogout }) {
                   </span>
                 </div>
                 <div className="mt-3 flex items-center justify-between text-xs text-slate-600">
-                  <span>{businesses.length} Target LIVE</span>
+                  <span>{businesses.length} Target Maps</span>
                   <span className="text-amber-600 font-medium">{queueMetrics.pending || 0} Antrean</span>
                 </div>
               </div>
 
-              {/* Card 4: Infrastruktur Server */}
-              <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs hover:border-slate-300 transition-all">
+              {/* Card 4: Target Bisnis Maps */}
+              <div 
+                onClick={() => setActiveTab('businesses')}
+                className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs hover:border-amber-400 hover:shadow-sm transition-all cursor-pointer group"
+              >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    Infrastruktur Host
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-amber-700 transition-colors">
+                    Target Bisnis Maps
                   </span>
-                  <div className="w-8 h-8 rounded-xl bg-cyan-50 text-cyan-600 flex items-center justify-center">
-                    <Server className="w-4 h-4" />
+                  <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center group-hover:bg-amber-600 group-hover:text-white transition-colors">
+                    <Building2 className="w-4 h-4" />
                   </div>
                 </div>
                 <div className="mt-3 flex items-baseline gap-2">
-                  <span className="text-3xl font-extrabold text-slate-900 font-mono tracking-tight">
-                    {displays.length}
+                  <span className="text-3xl font-extrabold text-slate-900 font-mono tracking-tight group-hover:text-amber-700 transition-colors">
+                    {businesses.length}
                   </span>
-                  <span className="text-xs text-slate-500 font-medium">Display Xvfb</span>
+                  <span className="text-xs text-slate-500 font-medium">Listing Google Maps</span>
                 </div>
                 <div className="mt-3 flex items-center justify-between text-xs text-slate-600">
-                  <span>RAM: {memUsed}/{memTotal} GB</span>
+                  <span>RAM Host: {memUsed}/{memTotal} GB</span>
                   <span className="font-mono text-emerald-600 font-semibold">{memPercent}%</span>
                 </div>
               </div>
@@ -1567,36 +1573,47 @@ export default function Dashboard({ onLogout }) {
               </div>
             </div>
 
-            {/* Bottom Row: Virtual Displays & Quick Business Launch */}
+            {/* Bottom Row: Google OAuth Quick Connect & Quick Business Launch */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Virtual Display Slots */}
-              <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h3 className="font-bold text-sm text-slate-900">Virtual Xvfb Displays</h3>
-                    <p className="text-xs text-slate-500">Alokasi port layar browser Chromium</p>
+              {/* Google OAuth 2.0 Quick Connect Card */}
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+                        <ShieldCheck className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-sm text-slate-900 leading-tight">Google OAuth 2.0 Client</h3>
+                        <p className="text-[11px] text-slate-500">Koneksi API Resmi Google</p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                      Siap
+                    </span>
                   </div>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
-                    6 Display Siap
-                  </span>
+                  <p className="text-xs text-slate-600 leading-relaxed mb-3">
+                    Hubungkan akun Google langsung secara resmi via Google Cloud OAuth. Sistem akan otomatis menyinkronkan nama, foto profil, dan token penyegaran.
+                  </p>
+                  <div className="space-y-1.5 text-[11px] bg-slate-50 border border-slate-200/70 rounded-xl p-3 mb-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500">Domain Origins:</span>
+                      <span className="font-mono text-slate-700 text-[10px] font-semibold">https://autobotix.my.id</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500">Akun Terdaftar:</span>
+                      <span className="font-mono font-bold text-blue-600">{cookies.length} Akun</span>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2.5">
-                  {[':99', ':100', ':101', ':102', ':103', ':104'].map((disp, i) => (
-                    <div
-                      key={disp}
-                      className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col items-center justify-center text-center hover:border-slate-300 transition-colors"
-                    >
-                      <Tv className="w-4 h-4 text-emerald-600 mb-1" />
-                      <span className="font-mono font-bold text-xs text-slate-800">{disp}</span>
-                      <span className="text-[10px] text-slate-500">Slot {i + 1}</span>
-                      <span className="mt-1 inline-flex items-center gap-1 text-[9px] text-emerald-600 font-semibold">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                        Ready
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                <a
+                  href="/auth/google"
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors cursor-pointer text-center"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Hubungkan Akun Google</span>
+                </a>
               </div>
 
               {/* Target LIVE Fast List */}
@@ -1656,287 +1673,10 @@ export default function Dashboard({ onLogout }) {
           </main>
         )}
 
-        {/* ===================================================================== */}
-        {/* TAB 2: 👤 MASTER AKUN GOOGLE (DAFTAR & KELOLA AKUN)                   */}
-        {/* ===================================================================== */}
-        {activeTab === 'accounts' && (
-          <main className="p-4 sm:p-6 space-y-5">
-            {/* Action & Filter Toolbar */}
-            <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
-              {/* Search Box */}
-              <div className="relative flex-1 max-w-md">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="Cari berdasarkan nama profil atau email..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors"
-                />
-              </div>
 
-              {/* Action Buttons */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  onClick={handleCheckAccountNames}
-                  disabled={isCheckingNames}
-                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors cursor-pointer"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isCheckingNames ? 'animate-spin' : ''}`} />
-                  <span>{isCheckingNames ? 'Memindai Google...' : 'Cek Nama Akun Live'}</span>
-                </button>
-
-                <button
-                  onClick={handleUnflagAll}
-                  className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
-                >
-                  Unflag Semua
-                </button>
-
-                <button
-                  onClick={() => setShowAddAccountModal(true)}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Tambah Akun Baru</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Filter Pills */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
-              {[
-                { id: 'all', label: `Semua (${emails.length})` },
-                { id: 'active', label: `● Aktif (${activeAccountsCount})` },
-                { id: 'needs_login', label: `▲ Perlu Login (${emails.filter((e) => e.cookie_status === 'needs_login').length})` },
-                { id: 'expired', label: `✖ Kedaluwarsa (${emails.filter((e) => e.cookie_status === 'expired').length})` },
-                { id: 'no_cookie', label: `Belum Ada Cookie (${emails.filter((e) => !e.cookie_status || e.cookie_status === 'no_cookie').length})` },
-                { id: 'flagged', label: `Flagged (${emails.filter((e) => e.flagged).length})` },
-              ].map((f) => (
-                <button
-                  key={f.id}
-                  onClick={() => setAccountFilter(f.id)}
-                  className={`px-3 py-1.5 rounded-lg font-semibold transition-colors shrink-0 cursor-pointer ${
-                    accountFilter === f.id
-                      ? 'bg-slate-900 text-white shadow-xs'
-                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Accounts Master Table */}
-            <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-xs">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
-                    <tr>
-                      <th className="py-3 px-4">Profil Akun Google</th>
-                      <th className="py-3 px-4">Email Google</th>
-                      <th className="py-3 px-4">Status Sesi Cookie</th>
-                      <th className="py-3 px-4">Flag Keamanan</th>
-                      <th className="py-3 px-4">Kredensial</th>
-                      <th className="py-3 px-4 text-right">Aksi</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredAccounts.map((acc) => {
-                      const isAktif = acc.cookie_status === 'active';
-                      const isNeedsLogin = acc.cookie_status === 'needs_login';
-                      const isExpired = acc.cookie_status === 'expired';
-                      const isNoCookie = !acc.cookie_status || acc.cookie_status === 'no_cookie';
-
-                      return (
-                        <tr key={acc.id} className="hover:bg-slate-50/60 transition-colors">
-                          {/* Nama Profil Akun */}
-                          <td className="py-3.5 px-4 font-medium">
-                            <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-indigo-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-2xs">
-                                {(acc.account_name || acc.email || 'A').slice(0, 1).toUpperCase()}
-                              </div>
-                              <div>
-                                <p className="font-bold text-slate-900">
-                                  {acc.account_name || (
-                                    <span className="text-slate-400 font-normal italic">
-                                      {isAktif ? 'Nama Terdaftar' : '- Sesi Belum Login -'}
-                                    </span>
-                                  )}
-                                </p>
-                                <span className="text-[10px] text-slate-400 font-mono">ID #{acc.id}</span>
-                              </div>
-                            </div>
-                          </td>
-
-                          {/* Email Akun */}
-                          <td className="py-3.5 px-4">
-                            <span className="font-mono text-slate-700 select-all">{acc.email}</span>
-                          </td>
-
-                          {/* Status Sesi Cookie */}
-                          <td className="py-3.5 px-4">
-                            {isAktif && (
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                                AKTIF
-                              </span>
-                            )}
-                            {isNeedsLogin && (
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                                <AlertTriangle className="w-3 h-3 text-amber-600" />
-                                PERLU LOGIN
-                              </span>
-                            )}
-                            {isExpired && (
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200">
-                                <X className="w-3 h-3 text-rose-600" />
-                                KEDALUWARSA
-                              </span>
-                            )}
-                            {isNoCookie && (
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-500 border border-slate-200">
-                                TIDAK ADA COOKIE
-                              </span>
-                            )}
-                          </td>
-
-                          {/* Status Flag */}
-                          <td className="py-3.5 px-4">
-                            {acc.flagged ? (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
-                                <ShieldAlert className="w-3 h-3" /> Flagged
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600">
-                                <ShieldCheck className="w-3 h-3 text-emerald-600" /> Siap
-                              </span>
-                            )}
-                          </td>
-
-                          {/* Kredensial */}
-                          <td className="py-3.5 px-4">
-                            <div className="flex items-center gap-1.5 text-slate-500 text-[11px]">
-                              {acc.password ? (
-                                <span className="bg-slate-100 px-1.5 py-0.5 rounded font-mono">••••••••</span>
-                              ) : (
-                                <span className="text-slate-400">Cookie Only</span>
-                              )}
-                              {acc.totp_secret && (
-                                <span className="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-bold text-[9px]">
-                                  2FA
-                                </span>
-                              )}
-                            </div>
-                          </td>
-
-                          {/* Aksi */}
-                          <td className="py-3.5 px-4 text-right">
-                            <div className="flex items-center justify-end gap-1">
-                              {/* Tombol Edit (Pensil) */}
-                              <button
-                                onClick={() => openEditAccountModal(acc)}
-                                title="Edit Email / Password / TOTP"
-                                className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
-                              >
-                                <Pencil className="w-4 h-4" />
-                              </button>
-
-                              {/* Tombol Test Login */}
-                              {(() => {
-                                const tlStatus = testLoginStatus[acc.id];
-                                const hasRealPwd = !!(acc.password && acc.password !== 'cookie_auth');
-                                const iconClass = "w-4 h-4";
-                                let btnClass = "p-1.5 rounded-lg transition-colors cursor-pointer ";
-                                let icon, titleText;
-
-                                if (tlStatus === 'loading') {
-                                  btnClass += "text-amber-500 bg-amber-50";
-                                  icon = <Loader2 className={`${iconClass} animate-spin`} />;
-                                  titleText = "Sedang mencoba login...";
-                                } else if (tlStatus === 'success') {
-                                  btnClass += "text-emerald-600 bg-emerald-50";
-                                  icon = <Check className={iconClass} />;
-                                  titleText = "Login berhasil!";
-                                } else if (tlStatus === 'failed') {
-                                  btnClass += "text-rose-600 bg-rose-50";
-                                  icon = <X className={iconClass} />;
-                                  titleText = "Login gagal";
-                                } else if (!hasRealPwd) {
-                                  btnClass += "text-slate-300 cursor-not-allowed";
-                                  icon = <FlaskConical className={iconClass} />;
-                                  titleText = "Tidak ada password — edit akun untuk menambahkan";
-                                } else {
-                                  btnClass += "text-slate-400 hover:text-violet-600 hover:bg-violet-50";
-                                  icon = <FlaskConical className={iconClass} />;
-                                  titleText = "Test Login ke Google dengan password tersimpan";
-                                }
-
-                                return (
-                                  <button
-                                    onClick={() => tlStatus !== 'loading' && handleTestLogin(acc.id, acc.email, hasRealPwd)}
-                                    title={titleText}
-                                    disabled={tlStatus === 'loading'}
-                                    className={btnClass}
-                                  >
-                                    {icon}
-                                  </button>
-                                );
-                              })()}
-
-                              {/* Pasang / Update Cookie button */}
-                              <button
-                                onClick={() => {
-                                  setCookieForm({ email: acc.email, cookie_json: '' });
-                                  setShowCookieModal(true);
-                                }}
-                                title="Pasang / Perbarui Cookie"
-                                className="p-1.5 text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
-                              >
-                                <Cookie className="w-4 h-4" />
-                              </button>
-
-                              {/* Toggle Unflag */}
-                              {Boolean(acc.flagged) && (
-                                <button
-                                  onClick={() => handleToggleUnflag(acc.id, acc.email, true)}
-                                  title="Pulihkan Akun (Unflag)"
-                                  className="p-1.5 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
-                                >
-                                  <Check className="w-4 h-4" />
-                                </button>
-                              )}
-
-                              {/* Delete Account */}
-                              <button
-                                onClick={() => handleDeleteAccount(acc.id, acc.email)}
-                                title="Hapus Akun"
-                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-
-                    {filteredAccounts.length === 0 && (
-                      <tr>
-                        <td colSpan="6" className="py-12 text-center text-xs text-slate-500">
-                          Tidak ada akun Google yang cocok dengan filter pencarian.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </main>
-        )}
 
         {/* ===================================================================== */}
-        {/* TAB 3: 🍪 KELOLA COOKIE SESI BROWSER                                  */}
+        {/* TAB 2: 🛡️ MANAJEMEN AKUN GOOGLE (GOOGLE OAUTH 2.0 CLIENT)             */}
         {/* ===================================================================== */}
         {activeTab === 'cookies' && (
           <main className="p-4 sm:p-6 space-y-5">
@@ -1946,39 +1686,50 @@ export default function Dashboard({ onLogout }) {
                 <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Cari cookie berdasarkan email akun..."
+                  placeholder="Cari akun berdasarkan email atau nama..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-colors"
                 />
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
                   onClick={handleCheckAccountNames}
                   disabled={isCheckingNames}
                   className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors cursor-pointer"
+                  title="Pindai dan verifikasi token OAuth & Cookie ke server Google"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isCheckingNames ? 'animate-spin' : ''}`} />
-                  <span>{isCheckingNames ? 'Memindai Google...' : 'Cek Nama Akun Live'}</span>
+                  <span>{isCheckingNames ? 'Memindai Google...' : 'Sinkron & Cek Token'}</span>
                 </button>
 
                 <button
                   onClick={() => setShowCookieModal(true)}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors cursor-pointer"
+                  className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-colors cursor-pointer"
+                  title="Import Cookie Manual (Alternatif / Fallback)"
+                >
+                  <Cookie className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Import Cookie JSON</span>
+                </button>
+
+                <a
+                  href="/auth/google"
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors cursor-pointer"
+                  title="Hubungkan akun Google resmi via Google Cloud OAuth 2.0"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>Tambah Cookie Baru</span>
-                </button>
+                  <span>+ Hubungkan Akun Google (OAuth 2.0)</span>
+                </a>
               </div>
             </div>
 
-            {/* Cookie Filter Pills */}
+            {/* Account Filter Pills */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
               {[
-                { id: 'all', label: `Semua Cookie (${cookies.length})` },
+                { id: 'all', label: `Semua Akun (${cookies.length})` },
                 { id: 'active', label: `● Sesi Aktif (${activeCookiesCount})` },
-                { id: 'needs_login', label: `▲ Perlu Login (${needsLoginCookiesCount})` },
+                { id: 'needs_login', label: `▲ Perlu Otorisasi (${needsLoginCookiesCount})` },
                 { id: 'expired', label: `✖ Kedaluwarsa (${expiredCookiesCount})` },
               ].map((f) => (
                 <button
@@ -1995,15 +1746,16 @@ export default function Dashboard({ onLogout }) {
               ))}
             </div>
 
-            {/* Cookies Table */}
+            {/* Accounts Table */}
             <div className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden shadow-xs">
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
                     <tr>
-                      <th className="py-3 px-4">Nama Akun Google</th>
-                      <th className="py-3 px-4">Email Sesi Gmail</th>
-                      <th className="py-3 px-4">Status Sesi</th>
+                      <th className="py-3 px-4">Profil Akun Google</th>
+                      <th className="py-3 px-4">Email Akun (Gmail)</th>
+                      <th className="py-3 px-4">Metode Otorisasi</th>
+                      <th className="py-3 px-4">Status Otorisasi</th>
                       <th className="py-3 px-4">Diagnosa / Alasan Respon</th>
                       <th className="py-3 px-4">Terakhir Diperbarui</th>
                       <th className="py-3 px-4 text-right">Aksi</th>
@@ -2014,6 +1766,7 @@ export default function Dashboard({ onLogout }) {
                       const isAktif = ck.status === 'active';
                       const isNeedsLogin = ck.status === 'needs_login';
                       const isExpired = ck.status === 'expired' || ck.status === 'invalid';
+                      const isOAuth = ck.auth_method === 'oauth' || ck.auth_method === 'google_oauth' || !!ck.oauth_access_token;
                       const displayName = (ck.account_name || ck.email || 'A').trim();
                       const initial = displayName ? displayName.charAt(0).toUpperCase() : 'A';
                       const avatarGradient = getProfileGradient(displayName);
@@ -2022,16 +1775,30 @@ export default function Dashboard({ onLogout }) {
                         <tr key={ck.id} className="hover:bg-slate-50/60 transition-colors">
                           <td className="py-3.5 px-4 font-medium">
                             <div className="flex items-center gap-3">
-                              <div className={`w-8 h-8 rounded-full bg-gradient-to-tr ${avatarGradient} text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-2xs`}>
+                              {ck.oauth_picture ? (
+                                <img
+                                  src={ck.oauth_picture}
+                                  alt={displayName}
+                                  referrerPolicy="no-referrer"
+                                  className="w-9 h-9 rounded-full object-cover border border-slate-200 shadow-2xs shrink-0"
+                                  onError={(e) => {
+                                    e.currentTarget.style.display = 'none';
+                                  }}
+                                />
+                              ) : null}
+                              <div
+                                style={{ display: ck.oauth_picture ? 'none' : 'flex' }}
+                                className={`w-9 h-9 rounded-full bg-gradient-to-tr ${avatarGradient} text-white items-center justify-center font-bold text-xs shrink-0 shadow-2xs`}
+                              >
                                 {initial}
                               </div>
                               <div>
                                 <p className="font-bold text-slate-900 leading-tight">
                                   {ck.account_name || (
-                                    <span className="text-slate-400 font-normal italic">- Belum Terverifikasi -</span>
+                                    <span className="text-slate-400 font-normal italic">- Akun Google -</span>
                                   )}
                                 </p>
-                                <span className="text-[10px] text-slate-400 font-mono">Cookie #{ck.id}</span>
+                                <span className="text-[10px] text-slate-400 font-mono">ID #{ck.id}</span>
                               </div>
                             </div>
                           </td>
@@ -2044,6 +1811,20 @@ export default function Dashboard({ onLogout }) {
                           </td>
 
                           <td className="py-3.5 px-4">
+                            {isOAuth ? (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                <ShieldCheck className="w-3 h-3 text-blue-600" />
+                                Google OAuth 2.0
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                                <Cookie className="w-3 h-3 text-slate-500" />
+                                Cookie Sesi (CDP)
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="py-3.5 px-4">
                             {isAktif && (
                               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                                 <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
@@ -2053,7 +1834,7 @@ export default function Dashboard({ onLogout }) {
                             {isNeedsLogin && (
                               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
                                 <AlertTriangle className="w-3 h-3 text-amber-600" />
-                                PERLU LOGIN
+                                PERLU OTORISASI
                               </span>
                             )}
                             {isExpired && (
@@ -2065,7 +1846,7 @@ export default function Dashboard({ onLogout }) {
                           </td>
 
                           <td className="py-3.5 px-4 text-slate-500 max-w-xs truncate" title={ck.error_reason || ''}>
-                            {ck.error_reason || (isAktif ? 'Sesi Google aktif dan terverifikasi.' : '-')}
+                            {ck.error_reason || (isAktif ? (isOAuth ? 'Token OAuth aktif & siap digunakan.' : 'Sesi Google aktif dan terverifikasi.') : '-')}
                           </td>
 
                           <td className="py-3.5 px-4 text-slate-500 text-[11px] font-mono">
@@ -2074,28 +1855,37 @@ export default function Dashboard({ onLogout }) {
 
                           <td className="py-3.5 px-4 text-right">
                             <div className="flex items-center justify-end gap-1">
+                              {/* Re-authenticate via OAuth */}
+                              <a
+                                href="/auth/google"
+                                title="Otorisasi Ulang Google OAuth"
+                                className="p-1.5 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <KeyRound className="w-4 h-4" />
+                              </a>
+
                               {/* Uji Validitas */}
                               <button
                                 onClick={() => handleTestCookie(ck.id, ck.email)}
-                                title="Uji Validitas Sesi Google"
+                                title="Uji Validitas Sesi / Token Google"
                                 className="p-1.5 text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
                               >
                                 <RefreshCw className="w-4 h-4" />
                               </button>
 
-                              {/* Lihat Snippet JSON */}
+                              {/* Lihat Snippet Token / Cookie */}
                               <button
                                 onClick={() => setSnippetModalCookie(ck)}
-                                title="Lihat Payload Token"
+                                title="Lihat Payload Kredensial"
                                 className="p-1.5 text-slate-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
                               >
                                 <Eye className="w-4 h-4" />
                               </button>
 
-                              {/* Hapus Cookie */}
+                              {/* Hapus Akun */}
                               <button
                                 onClick={() => handleDeleteCookie(ck.id, ck.email)}
-                                title="Hapus Cookie"
+                                title="Hapus Akun Ini"
                                 className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                               >
                                 <Trash2 className="w-4 h-4" />
@@ -2108,8 +1898,8 @@ export default function Dashboard({ onLogout }) {
 
                     {filteredCookies.length === 0 && (
                       <tr>
-                        <td colSpan="6" className="py-12 text-center text-xs text-slate-500">
-                          Belum ada cookie Google terdaftar.
+                        <td colSpan="7" className="py-12 text-center text-xs text-slate-500">
+                          Belum ada akun Google terdaftar. Klik "+ Hubungkan Akun Google (OAuth 2.0)" di atas untuk menghubungkan akun.
                         </td>
                       </tr>
                     )}
@@ -2118,16 +1908,19 @@ export default function Dashboard({ onLogout }) {
               </div>
             </div>
 
-            {/* Panduan Singkat Export Cookie */}
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs text-slate-600 flex items-start gap-3">
-              <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+            {/* Informasi Google OAuth 2.0 Client */}
+            <div className="bg-blue-50/60 border border-blue-200 rounded-2xl p-4 text-xs text-blue-900 flex items-start gap-3">
+              <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
               <div>
-                <p className="font-bold text-slate-900">Panduan Tambah Cookie Google</p>
+                <p className="font-bold text-slate-900">Integrasi Resmi Google OAuth 2.0 Client Aktif</p>
                 <p className="mt-1 text-slate-600 leading-relaxed">
-                  Buka Google Chrome di laptop/PC Anda, pastikan sudah login ke akun Google di maps.google.com atau myaccount.google.com.
-                  Buka ekstensi <b>Cookie-Editor</b> ➔ Klik <b>Export</b> ➔ Pilih <b>Export as JSON</b>.
-                  Lalu tempelkan (*paste*) JSON ke tombol <b>Tambah Cookie Baru</b> di atas. Sistem akan memverifikasi sesi dan mengekstrak nama profil akun Google Anda secara otomatis.
+                  Akun Google Anda kini terhubung langsung menggunakan <b>Google Cloud OAuth 2.0 Client</b>. 
+                  Sistem menyimpan <i>access token</i> dan <i>refresh token</i> aman, serta secara otomatis mengambil nama profil dan foto akun Google asli tanpa perlu mengekstrak cookie secara manual.
                 </p>
+                <div className="mt-2.5 flex items-center flex-wrap gap-4 text-[11px] text-slate-500 font-mono">
+                  <span>Client ID: <b className="text-slate-700">938790580232-tldkti8l0fuleb9mfmvl8t82vehku4gf.apps.googleusercontent.com</b></span>
+                  <span>Redirect URI: <b className="text-slate-700">https://autobotix.my.id/auth/google/callback</b></span>
+                </div>
               </div>
             </div>
           </main>
@@ -2191,49 +1984,9 @@ export default function Dashboard({ onLogout }) {
                 </div>
                 <div className="mt-3">
                   <span className="text-lg font-bold text-slate-900">Chromium 155</span>
-                  <p className="text-xs text-emerald-600 font-semibold mt-0.5">Native Linux (Zero VM)</p>
+                  <p className="text-xs text-emerald-600 font-semibold mt-0.5">Headless Automation</p>
                 </div>
-                <p className="text-[11px] text-slate-500 mt-2 font-mono">Display: :99 s/d :104</p>
-              </div>
-            </div>
-
-            {/* Virtual Displays Details */}
-            <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="font-bold text-sm text-slate-900">Virtual Displays Xvfb (6 Layar Paralel)</h3>
-                  <p className="text-xs text-slate-500">Display buffer RAM tempat Chromium merender GUI Google Maps</p>
-                </div>
-                <button
-                  onClick={() => navigate('/worker')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-colors"
-                >
-                  <Tv className="w-3.5 h-3.5" />
-                  <span>Buka Live Multi-Screen Monitor</span>
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {[':99', ':100', ':101', ':102', ':103', ':104'].map((disp, i) => (
-                  <div
-                    key={disp}
-                    className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 flex items-center justify-between"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center font-bold text-xs text-slate-800 shadow-2xs">
-                        {i + 1}
-                      </div>
-                      <div>
-                        <p className="font-mono font-bold text-xs text-slate-900">Display {disp}</p>
-                        <p className="text-[10px] text-slate-500">1366x768x24 (Slot {i + 1})</p>
-                      </div>
-                    </div>
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold bg-emerald-100/80 text-emerald-800 border border-emerald-300">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                      Aktif
-                    </span>
-                  </div>
-                ))}
+                <p className="text-[11px] text-slate-500 mt-2 font-mono">Server Engine Active</p>
               </div>
             </div>
 
@@ -2790,14 +2543,18 @@ export default function Dashboard({ onLogout }) {
         </div>
       )}
 
-      {/* Modal: View Cookie Snippet */}
+      {/* Modal: View Cookie / OAuth Snippet */}
       {snippetModalCookie && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl border border-slate-200 p-6 max-w-lg w-full shadow-xl">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
-                <Cookie className="w-4 h-4 text-emerald-600" />
-                <span>Payload Cookie #{snippetModalCookie.id} ({snippetModalCookie.email})</span>
+                {snippetModalCookie.auth_method === 'oauth' || snippetModalCookie.auth_method === 'google_oauth' || snippetModalCookie.oauth_access_token ? (
+                  <ShieldCheck className="w-4 h-4 text-blue-600" />
+                ) : (
+                  <Cookie className="w-4 h-4 text-emerald-600" />
+                )}
+                <span>Kredensial Akun #{snippetModalCookie.id} ({snippetModalCookie.email})</span>
               </h3>
               <button
                 onClick={() => setSnippetModalCookie(null)}
@@ -2807,16 +2564,63 @@ export default function Dashboard({ onLogout }) {
               </button>
             </div>
 
-            <div className="bg-slate-900 text-slate-200 p-3 rounded-xl font-mono text-[11px] max-h-80 overflow-y-auto">
-              <pre className="whitespace-pre-wrap">
-                {snippetModalCookie.cookie_json || 'Tidak ada data JSON tersimpan.'}
-              </pre>
-            </div>
+            {snippetModalCookie.auth_method === 'oauth' || snippetModalCookie.auth_method === 'google_oauth' || snippetModalCookie.oauth_access_token ? (
+              <div className="bg-slate-900 text-slate-200 p-4 rounded-xl font-mono text-[11px] max-h-80 overflow-y-auto space-y-2">
+                <div className="text-emerald-400 font-bold mb-2 flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>Google Cloud OAuth 2.0 Client Credentials</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1 py-1 border-b border-slate-800">
+                  <span className="text-slate-400">Email:</span>
+                  <span className="col-span-2 text-white font-semibold">{snippetModalCookie.email}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1 py-1 border-b border-slate-800">
+                  <span className="text-slate-400">Nama Profil:</span>
+                  <span className="col-span-2 text-slate-200">{snippetModalCookie.account_name || '-'}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1 py-1 border-b border-slate-800">
+                  <span className="text-slate-400">Status Token:</span>
+                  <span className="col-span-2 text-emerald-400 font-semibold">{snippetModalCookie.status || 'active'}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1 py-1 border-b border-slate-800">
+                  <span className="text-slate-400">Refresh Token:</span>
+                  <span className="col-span-2 text-emerald-300">
+                    {snippetModalCookie.oauth_refresh_token ? '✓ Tersedia (Auto Refresh Aktif)' : '-'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-1 py-1 border-b border-slate-800">
+                  <span className="text-slate-400">Kadaluwarsa:</span>
+                  <span className="col-span-2 text-slate-300">
+                    {snippetModalCookie.oauth_token_expiry ? new Date(snippetModalCookie.oauth_token_expiry * 1000).toLocaleString('id-ID') : 'Aktif'}
+                  </span>
+                </div>
+                {snippetModalCookie.oauth_picture && (
+                  <div className="grid grid-cols-3 gap-1 py-1 border-b border-slate-800">
+                    <span className="text-slate-400">Avatar URL:</span>
+                    <a href={snippetModalCookie.oauth_picture} target="_blank" rel="noreferrer" className="col-span-2 text-blue-400 hover:underline truncate block">
+                      {snippetModalCookie.oauth_picture}
+                    </a>
+                  </div>
+                )}
+                <div className="pt-2">
+                  <span className="text-slate-400">Access Token (Snippet Terenkripsi):</span>
+                  <p className="break-all text-[10px] text-blue-300 mt-1 bg-slate-950 p-2 rounded">
+                    {snippetModalCookie.oauth_access_token ? `${snippetModalCookie.oauth_access_token.substring(0, 40)}... [Secured in Server DB]` : '-'}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-slate-900 text-slate-200 p-3 rounded-xl font-mono text-[11px] max-h-80 overflow-y-auto">
+                <pre className="whitespace-pre-wrap">
+                  {snippetModalCookie.cookie_json || 'Tidak ada data JSON tersimpan.'}
+                </pre>
+              </div>
+            )}
 
             <div className="mt-4 flex justify-end">
               <button
                 onClick={() => setSnippetModalCookie(null)}
-                className="px-4 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
+                className="px-4 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
               >
                 Tutup
               </button>

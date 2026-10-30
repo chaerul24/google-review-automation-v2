@@ -237,6 +237,10 @@ export const api = {
     return request('/api/emails/unflag-all', { method: 'POST' });
   },
 
+  async getGoogleOAuthUrl() {
+    return request('/api/auth/google/url');
+  },
+
   async addCookie(email, cookie_json) {
     return request('/api/cookies', {
       method: 'POST',
