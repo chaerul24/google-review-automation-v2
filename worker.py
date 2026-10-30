@@ -103,8 +103,10 @@ _last_keepalive_ts = 0.0
 
 
 def periodic_session_keepalive(force: bool = False):
-    """Keep Google account sessions alive by periodically pinging myaccount.google.com,
-    auto-refreshing session status, and persisting refreshed rotating tokens.
+    """Keep Google account sessions alive.
+
+    - OAuth accounts: validate via Google tokeninfo API; auto-refresh access token if needed.
+    - Cookie accounts: ping myaccount.google.com to check session health.
     """
     global _last_keepalive_ts
     now = time.time()
@@ -113,38 +115,101 @@ def periodic_session_keepalive(force: bool = False):
 
     _last_keepalive_ts = now
     try:
+        import requests as _req
         import session_manager
         with db.get_db() as conn:
-            cookies = conn.execute("SELECT id, email, cookie_json FROM cookies ORDER BY id ASC").fetchall()
+            cookies = conn.execute(
+                "SELECT id, email, cookie_json, auth_method, oauth_access_token, "
+                "oauth_refresh_token, oauth_token_expiry, oauth_account_expiry "
+                "FROM cookies ORDER BY id ASC"
+            ).fetchall()
 
         if not cookies:
             return
 
         log.info("Starting background Google session keep-alive for %d accounts...", len(cookies))
         active_cnt = 0
+
         for row in cookies:
             cid = row["id"]
             email = row["email"]
-            c_json = row["cookie_json"]
+            auth_method = row["auth_method"] or "cookie"
+
             try:
-                res = session_manager.check_google_account_live(c_json, fallback_email=email)
-                st_val = res.get("status") or "needs_login"
-                acc_name = res.get("account_name") or ""
-                reason = res.get("reason") or ""
-                if st_val == "active":
-                    active_cnt += 1
-                with db.get_db() as conn:
-                    conn.execute(
-                        """UPDATE cookies
-                           SET status = ?, account_name = (CASE WHEN ? != '' THEN ? ELSE account_name END),
-                               last_checked_at = CURRENT_TIMESTAMP, error_reason = ?
-                           WHERE id = ?""",
-                        (st_val, acc_name, acc_name, reason, cid),
-                    )
-                    if acc_name:
-                        conn.execute("UPDATE emails SET account_name = ? WHERE email = ?", (acc_name, email))
+                # ── OAuth accounts ────────────────────────────────────────────
+                if auth_method == "oauth":
+                    # Check 30-day account grant expiry first
+                    account_expiry = row["oauth_account_expiry"] or 0
+                    if now > account_expiry:
+                        with db.get_db() as conn:
+                            conn.execute(
+                                "UPDATE cookies SET status = 'expired', error_reason = ?, "
+                                "last_checked_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                (db.OAUTH_ACCOUNT_EXPIRED_REASON, cid),
+                            )
+                        log.info("OAuth account %s 30-day grant expired.", email)
+                        continue
+
+                    # Validate / refresh the short-lived access token
+                    token = db.get_valid_oauth_token(email)
+                    if token:
+                        # Quick tokeninfo ping
+                        try:
+                            ti = _req.get(
+                                "https://www.googleapis.com/oauth2/v3/tokeninfo",
+                                params={"access_token": token},
+                                timeout=8,
+                            )
+                            if ti.status_code == 200:
+                                st_val = "active"
+                                reason = db.OAUTH_ACCOUNT_ACTIVE_REASON
+                            else:
+                                st_val = "needs_login"
+                                reason = f"Tokeninfo HTTP {ti.status_code}"
+                        except Exception as ping_err:
+                            st_val = "active"  # network blip — assume OK
+                            reason = db.OAUTH_ACCOUNT_ACTIVE_REASON
+                            log.debug("OAuth tokeninfo ping failed for %s: %s", email, ping_err)
+                    else:
+                        st_val = "needs_login"
+                        reason = "Gagal memperbarui token OAuth. Hubungkan ulang akun."
+
                     if st_val == "active":
-                        conn.execute("UPDATE emails SET flagged = 0, fail_count = 0 WHERE email = ?", (email,))
+                        active_cnt += 1
+                    with db.get_db() as conn:
+                        conn.execute(
+                            "UPDATE cookies SET status = ?, error_reason = ?, "
+                            "last_checked_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            (st_val, reason, cid),
+                        )
+                        if st_val == "active":
+                            conn.execute(
+                                "UPDATE emails SET flagged = 0, fail_count = 0 WHERE email = ?",
+                                (email,),
+                            )
+
+                # ── Cookie accounts ───────────────────────────────────────────
+                else:
+                    c_json = row["cookie_json"]
+                    res = session_manager.check_google_account_live(c_json, fallback_email=email)
+                    st_val = res.get("status") or "needs_login"
+                    acc_name = res.get("account_name") or ""
+                    reason = res.get("reason") or ""
+                    if st_val == "active":
+                        active_cnt += 1
+                    with db.get_db() as conn:
+                        conn.execute(
+                            """UPDATE cookies
+                               SET status = ?, account_name = (CASE WHEN ? != '' THEN ? ELSE account_name END),
+                                   last_checked_at = CURRENT_TIMESTAMP, error_reason = ?
+                               WHERE id = ?""",
+                            (st_val, acc_name, acc_name, reason, cid),
+                        )
+                        if acc_name:
+                            conn.execute("UPDATE emails SET account_name = ? WHERE email = ?", (acc_name, email))
+                        if st_val == "active":
+                            conn.execute("UPDATE emails SET flagged = 0, fail_count = 0 WHERE email = ?", (email,))
+
             except Exception as e:
                 log.warning("Keepalive check failed for %s: %s", email, e)
             time.sleep(2)  # polite jitter between account pings

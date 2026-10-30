@@ -79,8 +79,9 @@ def get_stats() -> Dict[str, Any]:
     with db.get_db() as conn:
         biz_count = conn.execute("SELECT COUNT(*) FROM businesses").fetchone()[0]
         acc_count = conn.execute("SELECT COUNT(*) FROM emails").fetchone()[0]
-        cookie_count = conn.execute("SELECT COUNT(*) FROM cookies WHERE cookie_json IS NOT NULL").fetchone()[0]
+        cookie_count = conn.execute("SELECT COUNT(*) FROM cookies").fetchone()[0]
         active_cookies = conn.execute("SELECT COUNT(*) FROM cookies WHERE status = 'active'").fetchone()[0]
+        oauth_count = conn.execute("SELECT COUNT(*) FROM cookies WHERE auth_method = 'oauth'").fetchone()[0]
         reviewed_count = conn.execute("SELECT COUNT(*) FROM reviews WHERE status = 'reviewed'").fetchone()[0]
         pending_count = conn.execute("SELECT COUNT(*) FROM reviews WHERE status = 'pending'").fetchone()[0]
     return {
@@ -88,6 +89,7 @@ def get_stats() -> Dict[str, Any]:
         "accounts": acc_count,
         "cookies": cookie_count,
         "active_cookies": active_cookies,
+        "oauth_count": oauth_count,
         "reviewed": reviewed_count,
         "pending": pending_count,
     }
@@ -136,7 +138,7 @@ def render_banner() -> Panel:
 [dim]« Native Chromium • Zero-VM Architecture »[/dim]
 
 [dim]Engine: {chrom_ver} | Display Xvfb: {active_disp_str}[/dim]
-[dim]Target Bisnis: [bold white]{stats['businesses']}[/bold white] | Akun Google: [bold white]{stats['accounts']}[/bold white] | Cookie Aktif: [bold green]{stats['active_cookies']}[/bold green] | Ulasan Selesai: [bold green]{stats['reviewed']}[/bold green] | Antrean: [bold yellow]{stats['pending']}[/bold yellow][/dim]"""
+[dim]Target Bisnis: [bold white]{stats['businesses']}[/bold white] | Akun Google: [bold white]{stats['accounts']}[/bold white] | Akun Aktif: [bold green]{stats['active_cookies']}[/bold green] | OAuth: [bold blue]{stats.get('oauth_count', 0)}[/bold blue] | Ulasan Selesai: [bold green]{stats['reviewed']}[/bold green] | Antrean: [bold yellow]{stats['pending']}[/bold yellow][/dim]"""
 
     return Panel(
         Align.center(banner_text),
@@ -177,7 +179,9 @@ def print_cookies_table():
         rows = conn.execute("""
             SELECT e.id, e.email, e.flagged, e.fail_count,
                    c.status AS cookie_status, c.updated_at, c.error_reason,
-                   LENGTH(c.cookie_json) AS cookie_len
+                   c.auth_method, c.account_name,
+                   LENGTH(c.cookie_json) AS cookie_len,
+                   c.oauth_account_expiry
             FROM emails e
             LEFT JOIN cookies c ON e.email = c.email
             ORDER BY e.id ASC
@@ -187,16 +191,24 @@ def print_cookies_table():
         console.print("[yellow]Belum ada akun Google terdaftar di database.[/yellow]")
         return
 
-    table = Table(title="🍪 Daftar Akun & Cookie Google", box=box.ROUNDED, header_style="bold cyan")
+    table = Table(title="🔑 Daftar Akun Google (OAuth & Cookie)", box=box.ROUNDED, header_style="bold cyan")
     table.add_column("ID", justify="center", width=5)
     table.add_column("Akun Email", style="bold white")
-    table.add_column("Cookie Status", justify="center")
-    table.add_column("Ukuran Sesi", justify="right", style="dim")
+    table.add_column("Nama Akun", style="cyan", max_width=20)
+    table.add_column("Metode", justify="center", width=10)
+    table.add_column("Status", justify="center")
+    table.add_column("Info Sesi", justify="right", style="dim")
     table.add_column("Flag / Gagal", justify="center")
-    table.add_column("Catatan / Error", style="dim red", overflow="ellipsis", max_width=40)
+    table.add_column("Catatan / Error", style="dim red", overflow="ellipsis", max_width=35)
+
+    import time as _time
+    now = _time.time()
 
     for r in rows:
         c_status = r["cookie_status"] or "no_cookie"
+        auth_method = r["auth_method"] or "cookie"
+        account_name = r["account_name"] or "-"
+
         if c_status == "active":
             status_badge = "[bold green]● AKTIF[/bold green]"
         elif c_status == "needs_login":
@@ -206,14 +218,33 @@ def print_cookies_table():
         else:
             status_badge = "[dim]TIDAK ADA[/dim]"
 
-        cookie_sz = f"{r['cookie_len']} B" if r["cookie_len"] else "-"
+        if auth_method == "oauth":
+            method_badge = "[bold blue]OAuth 2.0[/bold blue]"
+            expiry = r["oauth_account_expiry"] or 0
+            if expiry:
+                days_left = max(0, int((expiry - now) / 86400))
+                session_info = f"~{days_left}h tersisa"
+                # Convert remaining time to days properly
+                secs_left = max(0, expiry - now)
+                d = int(secs_left // 86400)
+                h = int((secs_left % 86400) // 3600)
+                session_info = f"{d}h {h}j" if d > 0 else f"{h}j"
+            else:
+                session_info = "-"
+        else:
+            method_badge = "[dim]Cookie CDP[/dim]"
+            cookie_sz = r["cookie_len"] or 0
+            session_info = f"{cookie_sz} B" if cookie_sz else "-"
+
         flag_badge = f"[red]Flagged ({r['fail_count']})[/red]" if r["flagged"] else f"[green]Normal ({r['fail_count']})[/green]"
 
         table.add_row(
             str(r["id"]),
             r["email"],
+            account_name,
+            method_badge,
             status_badge,
-            cookie_sz,
+            session_info,
             flag_badge,
             r["error_reason"] or "-"
         )
@@ -567,18 +598,43 @@ def interactive_loop():
 
             if email_target.lower() == "all":
                 with db.get_db() as conn:
-                    emails = [r[0] for r in conn.execute("SELECT email FROM cookies WHERE cookie_json IS NOT NULL").fetchall()]
+                    all_accs = conn.execute(
+                        "SELECT email, auth_method FROM cookies ORDER BY id ASC"
+                    ).fetchall()
             else:
-                emails = [email_target.strip()]
+                with db.get_db() as conn:
+                    row = conn.execute("SELECT email, auth_method FROM cookies WHERE email = ?", (email_target.strip(),)).fetchone()
+                all_accs = [row] if row else []
 
-            console.print(f"\n[cyan]Menguji validitas sesi {len(emails)} akun via Chromium CDP...[/cyan]")
+            console.print(f"\n[cyan]Menguji validitas sesi {len(all_accs)} akun...[/cyan]")
+            import requests as _req
             sm = session_manager.SessionManager()
-            for em in emails:
-                res = sm.validate_account_cookie(em, target_domain="google.com")
-                if res.is_valid:
-                    console.print(f"  [bold green]✓ {em}: Sesi Valid & Aktif[/bold green]")
+            for acc_row in all_accs:
+                em = acc_row["email"]
+                method = acc_row["auth_method"] or "cookie"
+                if method == "oauth":
+                    token = db.get_valid_oauth_token(em)
+                    if token:
+                        try:
+                            ui = _req.get(
+                                "https://www.googleapis.com/oauth2/v3/tokeninfo",
+                                params={"access_token": token},
+                                timeout=8,
+                            )
+                            if ui.status_code == 200:
+                                console.print(f"  [bold green]✓ [OAuth] {em}: Token Aktif & Valid[/bold green]")
+                            else:
+                                console.print(f"  [bold yellow]▲ [OAuth] {em}: Token invalid (HTTP {ui.status_code})[/bold yellow]")
+                        except Exception as e:
+                            console.print(f"  [bold yellow]▲ [OAuth] {em}: Tidak dapat verifikasi ({e})[/bold yellow]")
+                    else:
+                        console.print(f"  [bold red]✖ [OAuth] {em}: Token kedaluwarsa, perlu re-auth[/bold red]")
                 else:
-                    console.print(f"  [bold red]✖ {em}: {res.status.value} ({res.reason})[/bold red]")
+                    res = sm.validate_account_cookie(em, target_domain="google.com")
+                    if res.is_valid:
+                        console.print(f"  [bold green]✓ [Cookie] {em}: Sesi Valid & Aktif[/bold green]")
+                    else:
+                        console.print(f"  [bold red]✖ [Cookie] {em}: {res.status.value} ({res.reason})[/bold red]")
             Prompt.ask("\n[dim]Tekan Enter untuk kembali...[/dim]")
 
         elif choice == "6":
@@ -732,13 +788,41 @@ def main():
     elif args.command == "cookies":
         print_cookies_table()
         if args.check:
-            sm = session_manager.SessionManager()
+            import requests as _req
+            import time as _t
             with db.get_db() as conn:
-                emails = [r[0] for r in conn.execute("SELECT email FROM cookies WHERE cookie_json IS NOT NULL").fetchall()]
-            for em in emails:
-                res = sm.validate_account_cookie(em, target_domain="google.com")
-                col = "green" if res.is_valid else "red"
-                console.print(f"[{col}]● {em}: {res.status.value} ({res.reason})[/{col}]")
+                all_accounts = conn.execute(
+                    "SELECT email, auth_method, oauth_access_token, oauth_refresh_token, "
+                    "oauth_token_expiry, cookie_json FROM cookies ORDER BY id ASC"
+                ).fetchall()
+
+            console.print("\n[bold cyan]🔍 Memverifikasi semua akun...[/bold cyan]")
+            for row in all_accounts:
+                em = row["email"]
+                method = row["auth_method"] or "cookie"
+                if method == "oauth":
+                    # Check via token validity
+                    token = db.get_valid_oauth_token(em)
+                    if token:
+                        try:
+                            ui = _req.get(
+                                "https://www.googleapis.com/oauth2/v3/tokeninfo",
+                                params={"access_token": token},
+                                timeout=8,
+                            )
+                            if ui.status_code == 200:
+                                console.print(f"[green]● [OAuth] {em}: AKTIF ✓[/green]")
+                            else:
+                                console.print(f"[yellow]▲ [OAuth] {em}: Token invalid (HTTP {ui.status_code})[/yellow]")
+                        except Exception as e:
+                            console.print(f"[yellow]▲ [OAuth] {em}: Tidak dapat verifikasi ({e})[/yellow]")
+                    else:
+                        console.print(f"[red]✖ [OAuth] {em}: Token kedaluwarsa, perlu re-auth[/red]")
+                else:
+                    sm = session_manager.SessionManager()
+                    res = sm.validate_account_cookie(em, target_domain="google.com")
+                    col = "green" if res.is_valid else "red"
+                    console.print(f"[{col}]● [Cookie] {em}: {res.status.value} ({res.reason})[/{col}]")
     elif args.command == "logs":
         print_recent_logs(business_id=args.business, limit=args.lines)
     elif args.command == "test-browser":

@@ -1235,6 +1235,96 @@ def get_cookie_for_email(email):
         return row["cookie_json"] if row else None
 
 
+def get_oauth_account_for_email(email):
+    """Return OAuth credentials dict for an OAuth-method account, or None for cookie accounts.
+
+    Returns dict with keys: access_token, refresh_token, token_expiry, account_name
+    Returns None if the account uses cookie method or doesn't exist.
+    """
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT auth_method, oauth_access_token, oauth_refresh_token, "
+            "oauth_token_expiry, oauth_account_expiry, account_name "
+            "FROM cookies WHERE email = ?",
+            (email,)
+        ).fetchone()
+    if row and row["auth_method"] == "oauth":
+        return {
+            "access_token": row["oauth_access_token"],
+            "refresh_token": row["oauth_refresh_token"],
+            "token_expiry": row["oauth_token_expiry"],
+            "account_expiry": row["oauth_account_expiry"],
+            "account_name": row["account_name"],
+        }
+    return None
+
+
+def refresh_oauth_token(email):
+    """Exchange refresh_token for a new access_token via Google OAuth2.
+
+    Updates the DB with the new access_token and token_expiry.
+    Returns the new access_token string, or None on failure.
+    """
+    import os
+    import requests as _requests
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT oauth_refresh_token FROM cookies WHERE email = ? AND auth_method = 'oauth'",
+            (email,)
+        ).fetchone()
+    if not row or not row["oauth_refresh_token"]:
+        return None
+
+    client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
+    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return None
+
+    try:
+        resp = _requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": row["oauth_refresh_token"],
+                "grant_type": "refresh_token",
+            },
+            timeout=10,
+        )
+        data = resp.json()
+        new_token = data.get("access_token")
+        expires_in = data.get("expires_in", 3600)
+        if not new_token:
+            return None
+        new_expiry = time.time() + expires_in
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE cookies SET oauth_access_token = ?, oauth_token_expiry = ?, "
+                "status = 'active', error_reason = ?, last_checked_at = CURRENT_TIMESTAMP "
+                "WHERE email = ?",
+                (new_token, new_expiry, OAUTH_ACCOUNT_ACTIVE_REASON, email),
+            )
+        return new_token
+    except Exception:
+        return None
+
+
+def get_valid_oauth_token(email):
+    """Return a valid (possibly refreshed) access_token for an OAuth account.
+
+    Auto-refreshes if the stored token is expired or close to expiry (< 5 min).
+    Returns the access_token string, or None if refresh fails.
+    """
+    creds = get_oauth_account_for_email(email)
+    if creds is None:
+        return None  # not an OAuth account
+    expiry = creds.get("token_expiry") or 0
+    if time.time() < expiry - 300:
+        return creds["access_token"]
+    # Token expired or near-expired, refresh
+    return refresh_oauth_token(email)
+
+
 def save_cookie(email, cookie_json):
     """Insert or update cookie for an email."""
     with get_db() as conn:

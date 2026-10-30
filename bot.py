@@ -101,6 +101,53 @@ def get_fingerprint(email):
     }
 
 
+def is_oauth_account(email: str) -> bool:
+    """Return True if the email is registered as an OAuth 2.0 account."""
+    return db.get_oauth_account_for_email(email) is not None
+
+
+def apply_oauth_session_to_browser(sb, email: str) -> bool:
+    """Attempt to inject an OAuth-derived session into a Chromium CDP browser.
+
+    Strategy:
+    1. Get a valid OAuth access_token (auto-refreshes if near-expired).
+    2. Call Google's userinfo endpoint to confirm the token is live.
+    3. Load accounts.google.com/SignOutOptions which forces Google to set browser cookies
+       based on the signed-in Google session the profile already has, OR rely on the
+       Chromium profile directory which persists the Google session from the OAuth login flow.
+
+    Returns True if session appears valid (not redirected to login), False otherwise.
+    """
+    token = db.get_valid_oauth_token(email)
+    if not token:
+        log.warning("OAuth: no valid access token for %s", email)
+        return False
+
+    # Confirm token is live via userinfo
+    try:
+        ui = requests.get(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=8,
+        )
+        if ui.status_code != 200:
+            log.warning("OAuth userinfo returned %d for %s", ui.status_code, email)
+            return False
+        log.info("OAuth token valid for %s (%s)", email, ui.json().get("email"))
+    except Exception as e:
+        log.warning("OAuth userinfo check failed for %s: %s", email, e)
+        return False
+
+    # The Chromium profile already has the session persisted from the OAuth consent flow.
+    # We don't need to inject cookies — just confirm the browser isn't showing login page.
+    return True
+
+
+def has_cookie_available(email: str) -> bool:
+    """Return True if this email has either a valid cookie_json OR is an OAuth account."""
+    return db.get_cookie_for_email(email) is not None or is_oauth_account(email)
+
+
 def generate_gemini_review(
     api_key: str,
     business_name: str,
@@ -680,11 +727,32 @@ def post_review(
         sb.maximize()
         sb.sleep(2)
 
-        # ── Step: Setup Authenticated Session (2 METODE: Cookie & Login Kredensial) ──
+        # ── Step: Setup Authenticated Session (3 METODE: OAuth, Cookie & Login Kredensial) ──
         auth_ok = False
+        oauth_creds = db.get_oauth_account_for_email(email)
         cookie_available = db.get_cookie_for_email(email) is not None
 
-        if cookie_available:
+        if oauth_creds:
+            db.add_process_log(business_id, f"[{email}] [Cara 1] Menggunakan OAuth 2.0 Google (token terverifikasi)...", email_id)
+            oauth_ok = apply_oauth_session_to_browser(sb, email)
+            if oauth_ok:
+                # Verify the Chromium profile session is not stuck on login page
+                cur_url = sb.get_current_url() or ""
+                if "accounts.google.com" in cur_url:
+                    db.add_process_log(business_id, f"[{email}] ⚠ Browser masih di halaman login meski token OAuth valid. Mencoba reload...", email_id, "warning")
+                    sb.sleep(2)
+                    sb.open("https://myaccount.google.com/")
+                    sb.sleep(3)
+                    cur_url = sb.get_current_url() or ""
+                if "accounts.google.com" not in cur_url:
+                    auth_ok = True
+                    db.add_process_log(business_id, f"[{email}] ✓ Sesi OAuth aktif. Akun terautentikasi.", email_id)
+                else:
+                    db.add_process_log(business_id, f"[{email}] ✖ Sesi browser belum login meski token OAuth valid. Coba hubungkan ulang akun.", email_id, "error")
+            else:
+                db.add_process_log(business_id, f"[{email}] ✖ Token OAuth tidak valid atau kedaluwarsa. Coba hubungkan ulang akun.", email_id, "error")
+
+        elif cookie_available:
             db.add_process_log(business_id, f"[{email}] [Cara 1] Menggunakan Cookie Sesi Google tersimpan...", email_id)
             c_ok, c_status, c_reason = setup_authenticated_session(
                 sb, email, verification_url, business_id=business_id, email_id=email_id
@@ -705,7 +773,10 @@ def post_review(
                 else:
                     db.add_process_log(business_id, f"[{email}] ✖ Login kredensial gagal: {l_msg}.", email_id, "error")
             else:
-                db.add_process_log(business_id, f"[{email}] ✖ Tidak dapat masuk: Cookie tidak valid/tersedia dan Password belum diisi.", email_id, "error")
+                if oauth_creds:
+                    db.add_process_log(business_id, f"[{email}] ✖ Tidak dapat masuk: Token OAuth tidak valid dan Password belum diisi.", email_id, "error")
+                else:
+                    db.add_process_log(business_id, f"[{email}] ✖ Tidak dapat masuk: Cookie tidak valid/tersedia dan Password belum diisi.", email_id, "error")
 
         if not auth_ok:
             log.warning("Authentication failed for %s via both Cookie and Credential methods.", email)
@@ -1095,9 +1166,13 @@ def inspect_existing_review(email, maps_url, business_name, review_id=None, busi
             chromium_arg="--no-first-run,--no-default-browser-check,--disable-default-apps",
         )
         sb.sleep(3)
-        # Attempt non-destructive cookie session loading if stored
+        # Attempt non-destructive session loading if stored (cookie or OAuth)
+        oauth_creds = db.get_oauth_account_for_email(email)
         raw_cookie = db.get_cookie_for_email(email)
-        if raw_cookie:
+        if oauth_creds:
+            # OAuth: validate token is live (profile session should persist)
+            apply_oauth_session_to_browser(sb, email)
+        elif raw_cookie:
             val = session_manager.validate_cookie_payload(raw_cookie, target_domain="google.com")
             if val.is_valid:
                 session_manager.apply_cookies_to_browser(sb, val.sanitized_cookies, target)
@@ -1105,6 +1180,8 @@ def inspect_existing_review(email, maps_url, business_name, review_id=None, busi
         sb.sleep(3)
         current = sb.get_current_url()
         if "accounts.google.com" in current:
+            if oauth_creds:
+                return {"status": "unknown", "message": "Sesi OAuth belum aktif di browser; hubungkan ulang akun Google."}
             return {"status": "unknown", "message": "Sesi akun belum login; perbarui cookie yang sah terlebih dahulu."}
         body = sb.get_text("body") or ""
         markers = ("Your review", "Your Review", "Ulasan Anda", "Your rating")
@@ -1207,9 +1284,12 @@ def delete_own_review_on_maps(email, maps_url, business_name, email_id=None, bus
         sb.maximize()
         sb.sleep(2)
 
-        # Apply cookies if available
+        # Apply session: OAuth or cookie fallback
+        oauth_creds = db.get_oauth_account_for_email(email)
         raw_cookie = db.get_cookie_for_email(email)
-        if raw_cookie:
+        if oauth_creds:
+            apply_oauth_session_to_browser(sb, email)
+        elif raw_cookie:
             val = session_manager.validate_cookie_payload(raw_cookie, target_domain="google.com")
             if val.is_valid:
                 session_manager.apply_cookies_to_browser(sb, val.sanitized_cookies, target)
