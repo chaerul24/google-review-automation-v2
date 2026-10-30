@@ -33,3 +33,4 @@ audit-reports/
 # OS/editor artifacts
 .DS_Store
 *.log
+multichromium

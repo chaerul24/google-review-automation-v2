@@ -90,6 +90,18 @@ function getSplinePaths(points, baselineY) {
   return { linePath, areaPath };
 }
 
+function GmailLogo({ className = "w-4 h-4 shrink-0" }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none">
+      <path d="M22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6z" fill="#E8F0FE" />
+      <path d="M20 4H4c-1.1 0-2 .9-2 2v.4l10 6.25 10-6.25V6c0-1.1-.9-2-2-2z" fill="#EA4335" />
+      <path d="M2 6.4V18c0 1.1.9 2 2 2h4V10.25L2 6.4z" fill="#4285F4" />
+      <path d="M22 6.4l-6 3.85V20h4c1.1 0 2-.9 2-2V6.4z" fill="#34A853" />
+      <path d="M8 20v-9.75L12 12.7l4-2.45V20H8z" fill="#FBBC05" />
+    </svg>
+  );
+}
+
 export default function Dashboard({ onLogout }) {
   const navigate = useNavigate();
 
@@ -383,19 +395,19 @@ export default function Dashboard({ onLogout }) {
     setSubmitting(true);
     try {
       await api.addBusiness(bizForm.name, bizForm.url);
-      setSuccessMsg(`Bisnis "${bizForm.name}" berhasil ditambahkan!`);
+      setSuccessMsg(`Bisnis "${bizForm.name}" berhasil ditambahkan sebagai target ulasan Google Maps!`);
       setBizForm({ name: '', url: '' });
       setShowAddBizModal(false);
       loadDashboardData(true);
     } catch (err) {
-      setErrorMsg(`Gagal menambahkan bisnis: ${err.message || err}`);
+      setErrorMsg(`Gagal menambahkan target bisnis: ${err.message || err}`);
     } finally {
       setSubmitting(false);
     }
   };
 
   const handleDeleteBusiness = async (id, name) => {
-    if (!window.confirm(`Hapus bisnis target "${name}" dan riwayat ulasannya?`)) return;
+    if (!window.confirm(`Hapus target bisnis "${name}" dan riwayat ulasannya?`)) return;
     try {
       await api.deleteBusiness(id);
       setSuccessMsg(`Target bisnis "${name}" berhasil dihapus.`);
@@ -664,20 +676,6 @@ export default function Dashboard({ onLogout }) {
             </button>
 
             <button
-              onClick={() => { setActiveTab('accounts'); setMobileMenuOpen(false); }}
-              className={`w-full flex items-center px-4 py-3 rounded-none text-xs font-semibold transition-all cursor-pointer ${
-                activeTab === 'accounts'
-                  ? 'bg-slate-800 text-white border-l-3 border-emerald-500'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <Users className={`w-4 h-4 ${activeTab === 'accounts' ? 'text-emerald-400' : 'text-slate-400'}`} />
-                <span>Master Akun Google</span>
-              </div>
-            </button>
-
-            <button
               onClick={() => { setActiveTab('cookies'); setMobileMenuOpen(false); }}
               className={`w-full flex items-center px-4 py-3 rounded-none text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === 'cookies'
@@ -687,7 +685,7 @@ export default function Dashboard({ onLogout }) {
             >
               <div className="flex items-center gap-3">
                 <Cookie className={`w-4 h-4 ${activeTab === 'cookies' ? 'text-emerald-400' : 'text-slate-400'}`} />
-                <span>Kelola Cookie Sesi</span>
+                <span>Manajemen Cookie Sesi</span>
               </div>
             </button>
 
@@ -785,7 +783,6 @@ export default function Dashboard({ onLogout }) {
             <div className="min-w-0">
               <h1 className="text-sm sm:text-base lg:text-lg font-bold text-slate-900 tracking-tight truncate">
                 {activeTab === 'overview' && 'Executive Dashboard'}
-                {activeTab === 'accounts' && 'Master Akun Google'}
                 {activeTab === 'cookies' && 'Manajemen Cookie Sesi'}
                 {activeTab === 'server' && 'Manajemen Server'}
                 {activeTab === 'businesses' && 'Target Bisnis Maps'}
@@ -944,48 +941,54 @@ export default function Dashboard({ onLogout }) {
           <main className="p-4 sm:p-6 space-y-6">
             {/* Top 4 KPI Metrics */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {/* Card 1: Master Akun */}
-              <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs hover:border-slate-300 transition-all">
+              {/* Card 1: Manajemen Cookie Sesi */}
+              <div 
+                onClick={() => setActiveTab('cookies')}
+                className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs hover:border-emerald-400 hover:shadow-sm transition-all cursor-pointer group"
+              >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    Master Akun Google
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-emerald-700 transition-colors">
+                    Manajemen Cookie Sesi
                   </span>
-                  <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
-                    <Users className="w-4 h-4" />
+                  <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center group-hover:bg-emerald-600 group-hover:text-white transition-colors">
+                    <Cookie className="w-4 h-4" />
                   </div>
                 </div>
                 <div className="mt-3 flex items-baseline gap-2">
-                  <span className="text-3xl font-extrabold text-slate-900 font-mono tracking-tight">
-                    {emails.length}
+                  <span className="text-3xl font-extrabold text-slate-900 font-mono tracking-tight group-hover:text-emerald-700 transition-colors">
+                    {cookies.length}
                   </span>
-                  <span className="text-xs text-slate-500 font-medium">Akun Terdaftar</span>
+                  <span className="text-xs text-slate-500 font-medium">Akun Google Terhubung</span>
                 </div>
                 <div className="mt-3 flex items-center justify-between text-xs text-slate-600">
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                    <span>{activeAccountsCount} Akun Aktif</span>
+                    <span>{activeCookiesCount} Sesi Aktif</span>
                   </span>
-                  {data?.flagged_emails > 0 && (
-                    <span className="text-rose-600 font-semibold">{data.flagged_emails} Flagged</span>
+                  {needsLoginCookiesCount > 0 && (
+                    <span className="text-amber-600 font-semibold">{needsLoginCookiesCount} Perlu Login</span>
                   )}
                 </div>
               </div>
 
-              {/* Card 2: Cookie Sesi */}
-              <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs hover:border-slate-300 transition-all">
+              {/* Card 2: Status Cookie Sesi */}
+              <div 
+                onClick={() => setActiveTab('cookies')}
+                className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs hover:border-blue-400 hover:shadow-sm transition-all cursor-pointer group"
+              >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    Cookie Sesi Browser
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-blue-700 transition-colors">
+                    Status Cookie Google
                   </span>
-                  <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                    <Cookie className="w-4 h-4" />
+                  <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                    <ShieldCheck className="w-4 h-4" />
                   </div>
                 </div>
                 <div className="mt-3 flex items-baseline gap-2">
                   <span className="text-3xl font-extrabold text-emerald-600 font-mono tracking-tight">
                     {activeCookiesCount}
                   </span>
-                  <span className="text-xs text-slate-500 font-medium">/ {cookies.length} Total Sesi</span>
+                  <span className="text-xs text-slate-500 font-medium">/ {cookies.length} Siap Pakai</span>
                 </div>
                 <div className="mt-3 flex items-center justify-between text-xs text-slate-600">
                   <span className="text-amber-600 font-medium">
@@ -997,7 +1000,7 @@ export default function Dashboard({ onLogout }) {
                 </div>
               </div>
 
-              {/* Card 3: Target Bisnis & Ulasan */}
+              {/* Card 3: Ulasan Terkirim */}
               <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs hover:border-slate-300 transition-all">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -1016,7 +1019,7 @@ export default function Dashboard({ onLogout }) {
                   </span>
                 </div>
                 <div className="mt-3 flex items-center justify-between text-xs text-slate-600">
-                  <span>{businesses.length} Target Bisnis</span>
+                  <span>{businesses.length} Target LIVE</span>
                   <span className="text-amber-600 font-medium">{queueMetrics.pending || 0} Antrean</span>
                 </div>
               </div>
@@ -1431,7 +1434,7 @@ export default function Dashboard({ onLogout }) {
                   <div className="flex items-center justify-between">
                     <div>
                       <h3 className="font-bold text-sm text-slate-900">Kesehatan Sesi Cookie</h3>
-                      <p className="text-xs text-slate-500">Rasio status akun terverifikasi Google Maps</p>
+                      <p className="text-xs text-slate-500">Rasio status cookie akun Google aktif</p>
                     </div>
                     <span className="text-xs font-mono font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-lg border border-slate-200/60">
                       {totalCookieCount} Total
@@ -1578,11 +1581,11 @@ export default function Dashboard({ onLogout }) {
                 </div>
               </div>
 
-              {/* Target Bisnis Fast List */}
+              {/* Target LIVE Fast List */}
               <div className="lg:col-span-2 bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs">
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <h3 className="font-bold text-sm text-slate-900">Target Google Maps Terbaru</h3>
+                    <h3 className="font-bold text-sm text-slate-900">Target Bisnis Maps Terbaru</h3>
                     <p className="text-xs text-slate-500">Daftar bisnis yang siap menerima ulasan bot</p>
                   </div>
                   <button
@@ -1981,7 +1984,7 @@ export default function Dashboard({ onLogout }) {
                   <thead className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
                     <tr>
                       <th className="py-3 px-4">Nama Akun Google</th>
-                      <th className="py-3 px-4">Email Sesi</th>
+                      <th className="py-3 px-4">Email Sesi Gmail</th>
                       <th className="py-3 px-4">Status Sesi</th>
                       <th className="py-3 px-4">Diagnosa / Alasan Respon</th>
                       <th className="py-3 px-4">Terakhir Diperbarui</th>
@@ -1998,8 +2001,8 @@ export default function Dashboard({ onLogout }) {
                         <tr key={ck.id} className="hover:bg-slate-50/60 transition-colors">
                           <td className="py-3.5 px-4 font-medium">
                             <div className="flex items-center gap-2.5">
-                              <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold text-xs shrink-0">
-                                <Cookie className="w-3.5 h-3.5" />
+                              <div className="w-7 h-7 rounded-lg bg-white border border-slate-200/90 shadow-2xs flex items-center justify-center shrink-0">
+                                <GmailLogo className="w-4 h-4" />
                               </div>
                               <div>
                                 <p className="font-bold text-slate-900">
@@ -2013,7 +2016,10 @@ export default function Dashboard({ onLogout }) {
                           </td>
 
                           <td className="py-3.5 px-4 font-mono text-slate-700 select-all">
-                            {ck.email}
+                            <div className="flex items-center gap-2">
+                              <GmailLogo className="w-3.5 h-3.5 shrink-0" />
+                              <span className="font-semibold text-slate-800">{ck.email}</span>
+                            </div>
                           </td>
 
                           <td className="py-3.5 px-4">
@@ -2290,7 +2296,7 @@ export default function Dashboard({ onLogout }) {
                 className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-colors cursor-pointer self-start md:self-auto"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>Tambah Target Bisnis Baru</span>
+                <span>Tambah Target Bisnis Maps</span>
               </button>
             </div>
 
@@ -2550,8 +2556,8 @@ export default function Dashboard({ onLogout }) {
           <div className="bg-white rounded-2xl border border-slate-200 p-6 max-w-lg w-full shadow-xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-bold text-base text-slate-900 flex items-center gap-2">
-                <Cookie className="w-5 h-5 text-emerald-600" />
-                <span>Tambah / Perbarui Cookie Sesi</span>
+                <GmailLogo className="w-5 h-5" />
+                <span>Tambah / Perbarui Cookie Sesi Google</span>
               </h3>
               <button
                 onClick={() => setShowCookieModal(false)}
@@ -2614,7 +2620,7 @@ export default function Dashboard({ onLogout }) {
         </div>
       )}
 
-      {/* Modal: Tambah Target Bisnis */}
+      {/* Modal: Tambah Target Bisnis Maps */}
       {showAddBizModal && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl border border-slate-200 p-6 max-w-md w-full shadow-xl">
@@ -2645,11 +2651,11 @@ export default function Dashboard({ onLogout }) {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">URL Google Maps *</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">URL Google Maps Listing *</label>
                 <input
                   type="url"
                   required
-                  placeholder="https://maps.google.com/?cid=..."
+                  placeholder="https://maps.app.goo.gl/... atau https://www.google.com/maps/place/..."
                   value={bizForm.url}
                   onChange={(e) => setBizForm({ ...bizForm, url: e.target.value })}
                   className="w-full px-3.5 py-2 text-xs border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
@@ -2669,7 +2675,7 @@ export default function Dashboard({ onLogout }) {
                   disabled={submitting}
                   className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs transition-colors disabled:opacity-50"
                 >
-                  {submitting ? 'Menyimpan...' : 'Simpan Target Bisnis'}
+                  {submitting ? 'Menyimpan...' : 'Simpan Target Bisnis Maps'}
                 </button>
               </div>
             </form>

@@ -714,10 +714,25 @@ def api_cli_check_cookie_names():
         acc_name = live.get("account_name") or ""
         st_val = live.get("status") or "needs_login"
         reason = live.get("reason") or ""
+        real_email = live.get("real_email") or live.get("email") or email
+        final_email = email
+        if real_email and not real_email.startswith("google.session.") and real_email != email:
+            final_email = real_email
+
         if st_val == "active":
             active_count += 1
 
         with db.get_db() as conn:
+            if final_email != email:
+                dup_ck = conn.execute("SELECT id FROM cookies WHERE email = ? AND id != ?", (final_email, cid)).fetchone()
+                if not dup_ck:
+                    conn.execute("UPDATE cookies SET email = ? WHERE id = ?", (final_email, cid))
+                dup_em = conn.execute("SELECT id FROM emails WHERE email = ?", (final_email,)).fetchone()
+                if not dup_em:
+                    conn.execute("UPDATE emails SET email = ? WHERE email = ?", (final_email, email))
+                else:
+                    conn.execute("DELETE FROM emails WHERE email = ?", (email,))
+
             conn.execute(
                 """UPDATE cookies
                    SET status = ?, account_name = ?, last_checked_at = CURRENT_TIMESTAMP, error_reason = ?
@@ -728,12 +743,12 @@ def api_cli_check_cookie_names():
                 """UPDATE emails
                    SET account_name = ?, flagged = (CASE WHEN ? = 'active' THEN 0 ELSE flagged END)
                    WHERE email = ?""",
-                (acc_name, st_val, email),
+                (acc_name, st_val, final_email),
             )
 
         results.append({
             "id": cid,
-            "email": email,
+            "email": final_email,
             "account_name": acc_name,
             "status": st_val,
             "reason": reason,
@@ -1761,7 +1776,7 @@ def api_add_business():
     if not name or not _valid_business_url(url):
         return jsonify({"status": "error", "message": "Nama atau URL Google Maps tidak valid."}), 400
     biz_id = db.add_business(name, url)
-    return jsonify({"status": "ok", "business_id": biz_id})
+    return jsonify({"status": "ok", "business_id": biz_id, "url": url})
 
 
 @app.route("/business/<int:business_id>/delete", methods=["POST"])
@@ -2607,14 +2622,22 @@ def add_cookie():
     if not val.is_valid and val.status == session_manager.SessionStatus.INVALID:
         return redirect(url_for("dashboard", cookie_error=f"Format cookie tidak valid: {val.reason}"))
 
-    email = request.form.get("cookie_email", "").strip()
-    if not email:
-        email = val.detected_email or f"google.session.{int(time.time()) % 10000:04d}@gmail.com"
+    input_email = (request.form.get("cookie_email") or request.form.get("account_name") or "").strip()
+    placeholder_email = val.detected_email or f"google.session.{int(time.time()) % 10000:04d}@gmail.com"
+    check_email = input_email or placeholder_email
 
-    # Live check with Google to retrieve real account name and session status
-    live = session_manager.check_google_account_live(cookie_raw, fallback_email=email)
-    account_name = live.get("account_name") or ""
+    # Live check with Google to retrieve real account name, email, and session status
+    live = session_manager.check_google_account_live(cookie_raw, fallback_email=check_email)
+    account_name = input_email or live.get("account_name") or ""
     session_status = live.get("status") or val.status.value
+    detected_real_email = live.get("real_email") or live.get("email")
+
+    if input_email:
+        email = input_email
+    elif detected_real_email and not detected_real_email.startswith("google.session."):
+        email = detected_real_email
+    else:
+        email = placeholder_email
 
     json_to_save = val.normalized_json or json.dumps(val.sanitized_cookies)
     inserted = db.save_cookie(email, json_to_save)
@@ -2628,9 +2651,9 @@ def add_cookie():
     with db.get_db() as conn:
         existing = conn.execute("SELECT id FROM emails WHERE email = ?", (email,)).fetchone()
         if not existing:
-            conn.execute("INSERT INTO emails (email, password, flagged, fail_count) VALUES (?, ?, 0, 0)", (email, "cookie_auth"))
+            conn.execute("INSERT INTO emails (email, password, flagged, fail_count, account_name) VALUES (?, ?, 0, 0, ?)", (email, "cookie_auth", account_name))
         else:
-            conn.execute("UPDATE emails SET flagged = 0, fail_count = 0 WHERE email = ?", (email,))
+            conn.execute("UPDATE emails SET flagged = 0, fail_count = 0, account_name = ? WHERE email = ?", (account_name, email))
 
     return redirect(url_for("dashboard", cookie_saved=1, cookie_new=1 if inserted else 0))
 
@@ -2653,14 +2676,22 @@ def api_add_cookie():
     if not val.is_valid and val.status == session_manager.SessionStatus.INVALID:
         return jsonify({"status": "error", "message": f"Format cookie tidak valid: {val.reason}"}), 400
 
-    email = (data.get("cookie_email") or data.get("email") or "").strip()
-    if not email:
-        email = val.detected_email or f"google.session.{int(time.time()) % 10000:04d}@gmail.com"
+    input_email = (data.get("cookie_email") or data.get("email") or data.get("account_name") or "").strip()
+    placeholder_email = val.detected_email or f"google.session.{int(time.time()) % 10000:04d}@gmail.com"
+    check_email = input_email or placeholder_email
 
-    # Live check with Google to retrieve real account name and session status
-    live = session_manager.check_google_account_live(cookie_raw, fallback_email=email)
-    account_name = live.get("account_name") or ""
+    # Live check with Google to retrieve real account name, email, and session status
+    live = session_manager.check_google_account_live(cookie_raw, fallback_email=check_email)
+    account_name = input_email or live.get("account_name") or ""
     session_status = live.get("status") or val.status.value
+    detected_real_email = live.get("real_email") or live.get("email")
+
+    if input_email:
+        email = input_email
+    elif detected_real_email and not detected_real_email.startswith("google.session."):
+        email = detected_real_email
+    else:
+        email = placeholder_email
 
     json_to_save = val.normalized_json or json.dumps(val.sanitized_cookies)
     inserted = db.save_cookie(email, json_to_save)
@@ -2673,7 +2704,7 @@ def api_add_cookie():
     # Detect if another account already uses this exact session token
     core_sig = None
     for ck in val.sanitized_cookies:
-        if ck.get("name") in ("SID", "SAPISID", "__Secure-1PSID"):
+        if ck.get("name") in ("sessionid", "sid_guard", "uid_tt", "SID", "SAPISID", "__Secure-1PSID"):
             val_str = str(ck.get("value") or "")
             if val_str:
                 core_sig = hashlib.sha256(val_str.encode("utf-8")).hexdigest()[:8]
@@ -2686,7 +2717,7 @@ def api_add_cookie():
             if ec["email"] != email:
                 ec_val = session_manager.validate_cookie_payload(ec["cookie_json"])
                 for ck in ec_val.sanitized_cookies:
-                    if ck.get("name") in ("SID", "SAPISID", "__Secure-1PSID"):
+                    if ck.get("name") in ("sessionid", "sid_guard", "uid_tt", "SID", "SAPISID", "__Secure-1PSID"):
                         if str(ck.get("value") or "") and hashlib.sha256(str(ck.get("value")).encode()).hexdigest()[:8] == core_sig:
                             duplicate_email = ec["email"]
                             break
@@ -2696,9 +2727,9 @@ def api_add_cookie():
     with db.get_db() as conn:
         existing = conn.execute("SELECT id FROM emails WHERE email = ?", (email,)).fetchone()
         if not existing:
-            conn.execute("INSERT INTO emails (email, password, flagged, fail_count) VALUES (?, ?, 0, 0)", (email, "cookie_auth"))
+            conn.execute("INSERT INTO emails (email, password, flagged, fail_count, account_name) VALUES (?, ?, 0, 0, ?)", (email, "cookie_auth", account_name))
         else:
-            conn.execute("UPDATE emails SET flagged = 0, fail_count = 0 WHERE email = ?", (email,))
+            conn.execute("UPDATE emails SET flagged = 0, fail_count = 0, account_name = ? WHERE email = ?", (account_name, email))
 
     res_data = {
         "status": "ok",

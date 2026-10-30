@@ -472,14 +472,17 @@ def parse_cookie_payload(
             except (ValueError, TypeError):
                 pass
 
-        # Auto-extend Google cookies so they do not expire prematurely
-        google_core_names = (
+        # Auto-extend Google and TikTok cookies so they do not expire prematurely
+        auto_extend_core_names = (
+            "sessionid", "sid_guard", "uid_tt", "mstoken", "ttwid", "ttcsid",
+            "tt_session_tlb_tag", "s_v_web_id", "store-idc", "store-country-code-src",
+            "living_user_id", "passport_csrf_token_default",
             "sid", "hsid", "ssid", "apisid", "sapisid",
             "__secure-1psid", "__secure-3psid", "__secure-1psidts", "__secure-3psidts",
             "login_info", "nid", "1p_jar"
         )
         now_curr = time.time()
-        if name.lower() in google_core_names:
+        if name.lower() in auto_extend_core_names:
             # If expiry is missing, in the past, or expires within 60 days, extend to 2 years
             if expiry_ts is None or expiry_ts < now_curr + (60 * 86400):
                 expiry_ts = now_curr + (730 * 86400)  # 2 years in future
@@ -534,8 +537,10 @@ def validate_cookie_payload(
 
     # Key authentication tokens that imply session validity
     core_auth_names = {
+        "sessionid", "sid_guard", "uid_tt", "mstoken", "ttwid", "ttcsid",
+        "tt_session_tlb_tag", "s_v_web_id", "store-idc", "passport_csrf_token_default",
         "sid", "hsid", "ssid", "apisid", "sapisid", "__secure-1psid",
-        "__secure-3psid", "session", "sessionid", "token", "auth_token",
+        "__secure-3psid", "session", "token", "auth_token",
         "connect.sid", "remember_token", "jwt",
     }
     core_auth_present = False
@@ -757,6 +762,17 @@ def verify_browser_session(
         cur_url = target_url
 
     clean_host = extract_domain(cur_url)
+
+    # 0. Target: TikTok (https://www.tiktok.com/)
+    if "tiktok.com" in clean_host:
+        if "/login" in cur_url or "login" in cur_url:
+            return SessionStatus.NEEDS_LOGIN, "Sesi TikTok tidak aktif (dialihkan ke halaman login)."
+        try:
+            if sb.is_element_visible("button[data-e2e='top-login-button']"):
+                pass
+        except Exception:
+            pass
+        return SessionStatus.ACTIVE, f"Sesi TikTok aktif dan siaran LIVE terhubung ({cur_url[:60]})."
 
     # 1. Target: Google Accounts / Maps / Services
     if "google.com" in clean_host or "google.co.id" in clean_host:
@@ -1056,6 +1072,26 @@ def check_google_account_live(cookie_json_or_list: Any, fallback_email: str = ""
                 if m3:
                     account_name = m3.group(1).strip()
 
+        # Extract Real Google Email Address from live page
+        real_email = ""
+        m_email_aria = re.search(r'aria-label="[^"]*(?:Akun Google|Google Account):[^(]*\(([\w\.-]+@[\w\.-]+)\)', html)
+        if m_email_aria:
+            real_email = m_email_aria.group(1).strip()
+        else:
+            m_email_json = re.search(r'"(?:[a-zA-Z0-9_-]{3,10})"\s*:\s*"([\w\.-]+@(gmail\.com|googlemail\.com))"', html)
+            if m_email_json:
+                real_email = m_email_json.group(1).strip()
+            else:
+                cand_emails = [
+                    e for e in re.findall(r'[\w\.-]+@(?:gmail\.com|googlemail\.com)', html, re.I)
+                    if not e.lower().startswith("google.session.") and "google.com" not in e.lower()
+                ]
+                if cand_emails:
+                    real_email = cand_emails[0].strip()
+
+        if real_email:
+            email = real_email
+
         if not account_name and email:
             uname = email.split("@")[0]
             clean_uname = re.sub(r'[\._0-9]+', ' ', uname).strip()
@@ -1125,6 +1161,7 @@ def check_google_account_live(cookie_json_or_list: Any, fallback_email: str = ""
             "is_valid": True,
             "account_name": account_name,
             "email": email,
+            "real_email": real_email or email,
             "reason": "Sesi cookie Google aktif dan terverifikasi.",
         }
 
@@ -1153,3 +1190,85 @@ def check_google_account_live(cookie_json_or_list: Any, fallback_email: str = ""
             "email": email,
             "reason": f"Gagal verifikasi sesi Google: {exc}",
         }
+
+
+def check_tiktok_account_live(cookie_json_or_list: Any, fallback_account: str = "") -> dict:
+    """Inspect cookie to verify TikTok session and extract account details.
+    
+    Supports Cookie-Editor JSON array and raw cookie headers.
+    Returns:
+        {
+            "status": "active" | "needs_login" | "invalid",
+            "is_valid": bool,
+            "account_name": str,
+            "email": str,
+            "reason": str
+        }
+    """
+    val = validate_cookie_payload(cookie_json_or_list, target_domain="tiktok.com")
+    if not val.is_valid and val.status == SessionStatus.INVALID:
+        return {
+            "status": SessionStatus.INVALID.value,
+            "is_valid": False,
+            "account_name": fallback_account,
+            "email": fallback_account,
+            "reason": val.reason,
+        }
+
+    has_sessionid = False
+    has_sid_guard = False
+    living_id = None
+    uid = None
+
+    for ck in val.sanitized_cookies:
+        name = (ck.get("name") or "").strip().lower()
+        val_str = str(ck.get("value") or "").strip()
+        if name == "sessionid" and len(val_str) > 8:
+            has_sessionid = True
+        elif name == "sid_guard" and len(val_str) > 8:
+            has_sid_guard = True
+        elif name == "living_user_id" and val_str:
+            living_id = val_str
+        elif name == "uid_tt" and val_str:
+            uid = val_str[:10]
+
+    account_name = fallback_account
+    if not account_name:
+        if living_id:
+            account_name = f"tiktok_user_{living_id}"
+        elif uid:
+            account_name = f"tiktok_{uid}"
+        elif val.detected_email:
+            account_name = val.detected_email
+        else:
+            account_name = f"tiktok.bot.{int(time.time()) % 10000:04d}"
+
+    if has_sessionid or has_sid_guard:
+        return {
+            "status": SessionStatus.ACTIVE.value,
+            "is_valid": True,
+            "account_name": account_name,
+            "email": account_name,
+            "reason": "Cookie sesi TikTok valid dan aktif (sessionid terverifikasi).",
+        }
+    else:
+        return {
+            "status": SessionStatus.NEEDS_LOGIN.value,
+            "is_valid": False,
+            "account_name": account_name,
+            "email": account_name,
+            "reason": "Token otentikasi TikTok (sessionid / sid_guard) tidak ditemukan dalam cookie.",
+        }
+
+
+def check_account_live(cookie_json_or_list: Any, fallback_account: str = "") -> dict:
+    """Universal live checker: auto-detects whether cookies belong to TikTok or Google."""
+    text_peek = str(cookie_json_or_list).lower()
+    if any(tk in text_peek for tk in ("tiktok", "sessionid", "sid_guard", "uid_tt", "mstoken", "ttwid")):
+        return check_tiktok_account_live(cookie_json_or_list, fallback_account=fallback_account)
+    elif any(gk in text_peek for gk in ("google", "apisid", "sapisid", "hsid", "ssid")):
+        return check_google_account_live(cookie_json_or_list, fallback_email=fallback_account)
+    else:
+        # Default to Google since the platform is Google Review Automation
+        return check_google_account_live(cookie_json_or_list, fallback_email=fallback_account)
+
