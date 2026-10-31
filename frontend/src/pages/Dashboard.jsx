@@ -34,6 +34,7 @@ import {
   HardDrive,
   Layers,
   Tv,
+  Maximize2,
   BarChart3,
   PieChart,
   TrendingUp,
@@ -129,8 +130,17 @@ export default function Dashboard({ onLogout }) {
   const navigate = useNavigate();
 
   // Navigation Tab State
-  // 'overview' | 'accounts' | 'cookies' | 'server' | 'businesses'
-  const [activeTab, setActiveTab] = useState('overview');
+  // 'overview' | 'sharescreen' | 'cookies' | 'server' | 'businesses'
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const path = window.location.pathname.toLowerCase();
+      if (path.includes('screen')) return 'sharescreen';
+      if (path.includes('cookie') || path.includes('oauth')) return 'cookies';
+      if (path.includes('server')) return 'server';
+      if (path.includes('business')) return 'businesses';
+    }
+    return 'overview';
+  });
 
   // Core Data States
   const [loading, setLoading] = useState(true);
@@ -152,6 +162,43 @@ export default function Dashboard({ onLogout }) {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Live Sharescreen (1 Display) States
+  const [screenTs, setScreenTs] = useState(Date.now());
+  const [screenLogs, setScreenLogs] = useState([]);
+  const [streamActive, setStreamActive] = useState(true);
+  const [streamError, setStreamError] = useState(false);
+  const screenContainerRef = useRef(null);
+
+  const handleToggleFullscreen = () => {
+    if (!screenContainerRef.current) return;
+    if (!document.fullscreenElement) {
+      screenContainerRef.current.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'sharescreen') return;
+
+    let mounted = true;
+    const fetchLogs = async () => {
+      try {
+        const res = await api.getScreenLogs(25);
+        if (mounted && res && res.logs) {
+          setScreenLogs(res.logs);
+        }
+      } catch {}
+    };
+
+    fetchLogs();
+    const interval = setInterval(fetchLogs, 2500);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, [activeTab]);
 
   // Chart Interactive States
   const [chartHoverIdx, setChartHoverIdx] = useState(null);
@@ -731,6 +778,23 @@ export default function Dashboard({ onLogout }) {
             </button>
 
             <button
+              onClick={() => { setActiveTab('sharescreen'); setMobileMenuOpen(false); }}
+              className={`w-full flex items-center px-4 py-3 rounded-none text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'sharescreen'
+                  ? 'bg-slate-800 text-white border-l-3 border-emerald-500'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Tv className={`w-4 h-4 ${activeTab === 'sharescreen' ? 'text-emerald-400' : 'text-slate-400'}`} />
+                <span className="flex items-center gap-2">
+                  <span>Sharescreen Bot</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                </span>
+              </div>
+            </button>
+
+            <button
               onClick={() => { setActiveTab('cookies'); setMobileMenuOpen(false); }}
               className={`w-full flex items-center px-4 py-3 rounded-none text-xs font-semibold transition-all cursor-pointer ${
                 activeTab === 'cookies'
@@ -828,6 +892,7 @@ export default function Dashboard({ onLogout }) {
             <div className="min-w-0">
               <h1 className="text-sm sm:text-base lg:text-lg font-bold text-slate-900 tracking-tight truncate">
                 {activeTab === 'overview' && 'Executive Dashboard'}
+                {activeTab === 'sharescreen' && 'Live Sharescreen Bot (Display :99)'}
                 {activeTab === 'cookies' && 'Manajemen Akun Google (Google OAuth 2.0 Client)'}
                 {activeTab === 'server' && 'Manajemen Server'}
                 {activeTab === 'businesses' && 'Target Bisnis Maps'}
@@ -1692,6 +1757,174 @@ export default function Dashboard({ onLogout }) {
                     </div>
                   )}
                 </div>
+              </div>
+            </div>
+          </main>
+        )}
+
+
+
+        {/* ===================================================================== */}
+        {/* TAB: 📺 LIVE SHARESCREEN 1 DISPLAY (:99)                             */}
+        {/* ===================================================================== */}
+        {activeTab === 'sharescreen' && (
+          <main className="p-4 sm:p-6 space-y-6">
+            {/* Header Card */}
+            <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-11 h-11 rounded-xl bg-slate-900 flex items-center justify-center text-emerald-400 shadow-sm shrink-0">
+                  <Tv className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">
+                      Sharescreen Bot (Display :99)
+                    </h2>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      LIVE STREAM
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Memantau tampilan langsung browser Chromium headless di server Linux saat bot mengeksekusi ulasan Google Maps.
+                  </p>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => {
+                    setScreenTs(Date.now());
+                    setStreamError(false);
+                  }}
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition flex items-center gap-1.5 cursor-pointer"
+                  title="Segarkan stream layar"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Segarkan</span>
+                </button>
+                <button
+                  onClick={handleToggleFullscreen}
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition flex items-center gap-1.5 cursor-pointer"
+                  title="Mode Layar Penuh"
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                  <span>Fullscreen</span>
+                </button>
+                <a
+                  href="/api/screen/stream.mjpg"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition flex items-center gap-1.5 shadow-sm shadow-emerald-600/20 cursor-pointer"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Buka Tab Baru</span>
+                </a>
+              </div>
+            </div>
+
+            {/* Main Video Screen Container */}
+            <div
+              ref={screenContainerRef}
+              className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-xl relative flex flex-col"
+            >
+              {/* Screen Top Bar */}
+              <div className="px-4 py-2.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
+                  <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
+                  <span className="w-2.5 h-2.5 rounded-full bg-green-500/80" />
+                  <span className="ml-2 font-mono text-[11px] text-slate-300">
+                    AutoBotix Chromium Engine • Virtual Display :99 (1366 × 768)
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="font-mono text-[11px] text-emerald-400 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                    LIVE MJPEG STREAM
+                  </span>
+                </div>
+              </div>
+
+              {/* Video / Image Display Area */}
+              <div className="relative w-full aspect-video bg-black flex items-center justify-center overflow-hidden">
+                {streamActive && !streamError ? (
+                  <img
+                    key={screenTs}
+                    src={`/api/screen/stream.mjpg?t=${screenTs}`}
+                    alt="Live Sharescreen Display :99"
+                    className="w-full h-full object-contain"
+                    onError={() => setStreamError(true)}
+                  />
+                ) : (
+                  <div className="text-center p-8 space-y-3">
+                    <Tv className="w-12 h-12 text-slate-600 mx-auto" />
+                    <p className="text-sm font-semibold text-slate-300">
+                      Display :99 Sedang Standby
+                    </p>
+                    <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                      Layar otomatis aktif dan menampilkan aksi browser secara real-time saat Anda menjalankan tugas ulasan.
+                    </p>
+                    <button
+                      onClick={() => {
+                        setStreamError(false);
+                        setScreenTs(Date.now());
+                      }}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl cursor-pointer"
+                    >
+                      Coba Muat Ulang Layar
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Live Bot Activity Logs Section */}
+            <div className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-emerald-600" />
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Log Aktivitas Bot Terkini (Real-Time)
+                  </h3>
+                </div>
+                <span className="text-[11px] text-slate-400 font-mono">Auto-refresh tiap 2.5 detik</span>
+              </div>
+
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 sm:p-4 font-mono text-xs max-h-64 overflow-y-auto space-y-2">
+                {screenLogs && screenLogs.length > 0 ? (
+                  screenLogs.map((log) => {
+                    const lvl = (log.level || 'info').toLowerCase();
+                    let badgeClass = 'text-sky-400 bg-sky-950/60 border-sky-800';
+                    if (lvl === 'success') badgeClass = 'text-emerald-400 bg-emerald-950/60 border-emerald-800';
+                    else if (lvl === 'warning' || lvl === 'warn') badgeClass = 'text-amber-400 bg-amber-950/60 border-amber-800';
+                    else if (lvl === 'error' || lvl === 'fatal') badgeClass = 'text-rose-400 bg-rose-950/60 border-rose-800';
+
+                    return (
+                      <div key={log.id} className="flex items-start gap-2.5 leading-relaxed border-b border-slate-900/80 pb-1.5 last:border-none">
+                        <span className="text-slate-500 text-[11px] shrink-0 pt-0.5">
+                          {log.created_at ? log.created_at.split(' ')[1] : '--:--:--'}
+                        </span>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase border shrink-0 ${badgeClass}`}>
+                          {lvl}
+                        </span>
+                        {log.business_name && (
+                          <span className="text-slate-400 text-[11px] shrink-0">
+                            [{log.business_name}]
+                          </span>
+                        )}
+                        <span className="text-slate-200 break-words flex-1">
+                          {log.message}
+                        </span>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-slate-500 text-center py-4">
+                    Belum ada log proses ulasan aktif. Jalankan task ulasan untuk melihat aktivitas.
+                  </div>
+                )}
               </div>
             </div>
           </main>

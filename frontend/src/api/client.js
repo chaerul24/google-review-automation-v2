@@ -396,4 +396,9 @@ export const api = {
       body: JSON.stringify({ action, ...params }),
     });
   },
+
+  // Live Screen Logs
+  async getScreenLogs(limit = 25) {
+    return request(`/api/screen/logs?limit=${limit}`);
+  },
 };

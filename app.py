@@ -1426,11 +1426,93 @@ def api_worker_preview():
         return Response("Preview worker belum tersedia.", status=503, mimetype="text/plain")
 
 
+@app.route("/api/screen/stream.mjpg")
+@app.route("/api/screen/stream")
+@login_required
+def api_screen_stream():
+    """Live MJPEG video stream of host Chromium Display :99 (1 Display ShareScreen)."""
+    display = os.environ.get("CHROMIUM_DISPLAY", ":99")
+
+    def frames():
+        try:
+            while True:
+                proc = subprocess.run(
+                    [
+                        "ffmpeg", "-hide_banner", "-loglevel", "error",
+                        "-f", "x11grab", "-video_size", "1366x768",
+                        "-i", display, "-frames:v", "1",
+                        "-q:v", "5", "-f", "image2pipe", "-vcodec", "mjpeg", "-",
+                    ],
+                    capture_output=True,
+                    timeout=2.0,
+                )
+                if proc.returncode == 0 and proc.stdout:
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + proc.stdout + b'\r\n')
+                time.sleep(0.35)
+        except (GeneratorExit, StopIteration):
+            return
+        except Exception:
+            return
+
+    return Response(
+        stream_with_context(frames()),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
+@app.route("/api/screen/preview.png")
+@app.route("/api/screen/preview")
+@login_required
+def api_screen_preview():
+    """Single-frame PNG snapshot of host Chromium Display :99."""
+    display = os.environ.get("CHROMIUM_DISPLAY", ":99")
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-f", "x11grab", "-video_size", "1366x768",
+                "-i", display, "-frames:v", "1",
+                "-f", "image2pipe", "-vcodec", "png", "-",
+            ],
+            capture_output=True,
+            timeout=3.0,
+            check=True,
+        )
+        return Response(
+            proc.stdout,
+            mimetype="image/png",
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
+    except Exception:
+        return Response("Display :99 belum aktif", status=503, mimetype="text/plain")
+
+
+@app.route("/api/screen/logs", methods=["GET"])
+@login_required
+def api_screen_logs():
+    """Return latest process logs for the sharescreen monitor."""
+    limit = min(50, int(request.args.get("limit", 25)))
+    with db.get_db() as conn:
+        rows = conn.execute(
+            """SELECT pl.id, pl.business_id, b.name as business_name, pl.level, pl.message, pl.created_at
+               FROM process_logs pl
+               LEFT JOIN businesses b ON pl.business_id = b.id
+               ORDER BY pl.id DESC LIMIT ?""",
+            (limit,)
+        ).fetchall()
+        logs = [dict(r) for r in rows]
+    return jsonify({"status": "ok", "logs": logs})
+
+
 # ── SPA Feature Routes ────────────────────────────────────────────────────────
 
 @app.route("/review-studio")
 @app.route("/campaigns")
 @app.route("/live-monitor")
+@app.route("/screen")
+@app.route("/sharescreen")
 @login_required
 def spa_feature_pages():
     spa = _serve_spa()
