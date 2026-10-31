@@ -1118,8 +1118,12 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
                 st_badge = f"{C_MAGENTA}○ BELUM ADA SESI{C_RESET}"
             else:
                 st_badge = f"{C_DIM}- TIDAK AKTIF -{C_RESET}"
+            tok = c.get("oauth_access_token") or ""
+            tok_snippet = f"{tok[:35]}... [Secured in Server DB]" if tok else ""
             line1 = f" {C_YELLOW}[#{cid}]{C_RESET} [{method_tag}] {C_WHITE}{C_BOLD}{name}{C_RESET} ──> {st_badge}"
             line2 = f"       {C_CYAN}{email}{C_RESET}"
+            if tok_snippet:
+                line2 += f"\n       {C_BLUE}{tok_snippet}{C_RESET}"
             print(truncate_ansi(line1, cols - 1))
             print(truncate_ansi(line2, cols - 1))
         print()
@@ -1136,6 +1140,8 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
         c_status = (c.get("status") or "unknown").lower()
         auth_method = c.get("auth_method") or "cookie"
         has_pwd = bool(c.get("has_password"))
+        tok = c.get("oauth_access_token") or ""
+        tok_snippet = f"{tok[:35]}... [Secured in Server DB]" if tok else ""
 
         if auth_method == "oauth":
             method_color = f"{C_BLUE}OAuth 2.0{C_RESET}"
@@ -1162,6 +1168,8 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
         st_pad = pad_to_display_width(st_color, 20)
         row = f" {C_YELLOW}{cid:<5}{C_RESET} {C_WHITE}{name:<22}{C_RESET} {C_CYAN}{email:<30}{C_RESET} {method_pad} {st_pad}"
         print(truncate_ansi(row, cols - 1))
+        if tok_snippet:
+            print(f"       {C_BLUE}{tok_snippet}{C_RESET}")
     print()
     if has_auto_login:
         print(f" {C_BOLD}{C_GREEN}🛡️  ANTI-LOGOUT GUARD AKTIF:{C_RESET} {C_WHITE}Bot dilindungi mutlak dari aksi logout Google.{C_RESET}")

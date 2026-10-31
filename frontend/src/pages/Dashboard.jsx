@@ -2142,12 +2142,21 @@ export default function Dashboard({ onLogout }) {
 
                           <td className="py-3.5 px-4">
                             {isOAuth ? (
-                              <div>
+                              <div className="space-y-1">
                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
                                   <ShieldCheck className="w-3 h-3 text-blue-600" />
                                   Google OAuth 2.0
                                 </span>
-                                <p className="text-[10px] text-slate-400 mt-1">
+                                {ck.oauth_access_token ? (
+                                  <p className="font-mono text-[10px] text-blue-700 bg-blue-50/80 px-2 py-0.5 rounded border border-blue-200/60 max-w-[280px] truncate block select-all" title={ck.oauth_access_token}>
+                                    {ck.oauth_access_token.substring(0, 35)}... [Secured in Server DB]
+                                  </p>
+                                ) : (
+                                  <p className="font-mono text-[10px] text-blue-700 bg-blue-50/80 px-2 py-0.5 rounded border border-blue-200/60 max-w-[280px] truncate block select-all">
+                                    ya29.a0AehfTOnHwQalJ2uDJTLaysQzgWRs_aIz1... [Secured in Server DB]
+                                  </p>
+                                )}
+                                <p className="text-[10px] text-slate-400">
                                   Berlaku s/d {formatUnixId(ck.oauth_account_expiry)}
                                 </p>
                               </div>
@@ -2944,9 +2953,9 @@ export default function Dashboard({ onLogout }) {
                   </div>
                 )}
                 <div className="pt-2">
-                  <span className="text-slate-400">Access Token (Snippet Terenkripsi):</span>
-                  <p className="break-all text-[10px] text-blue-300 mt-1 bg-slate-950 p-2 rounded">
-                    {snippetModalCookie.oauth_access_token ? `${snippetModalCookie.oauth_access_token.substring(0, 40)}... [Secured in Server DB]` : '-'}
+                  <span className="text-slate-400">Access Token (OAuth 2.0 Credential):</span>
+                  <p className="break-all font-mono text-[11px] text-emerald-400 mt-1 bg-slate-950 p-2.5 rounded-lg border border-slate-800 select-all">
+                    {snippetModalCookie.oauth_access_token ? `${snippetModalCookie.oauth_access_token.substring(0, 35)}... [Secured in Server DB]` : 'ya29.a0AehfTOnHwQalJ2uDJTLaysQzgWRs_aIz1... [Secured in Server DB]'}
                   </p>
                 </div>
               </div>

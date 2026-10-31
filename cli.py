@@ -181,7 +181,8 @@ def print_cookies_table():
                    c.status AS cookie_status, c.updated_at, c.error_reason,
                    c.auth_method, c.account_name,
                    LENGTH(c.cookie_json) AS cookie_len,
-                   c.oauth_account_expiry
+                   c.oauth_account_expiry,
+                   c.oauth_access_token
             FROM emails e
             LEFT JOIN cookies c ON e.email = c.email
             ORDER BY e.id ASC
@@ -222,15 +223,18 @@ def print_cookies_table():
             method_badge = "[bold blue]OAuth 2.0[/bold blue]"
             expiry = r["oauth_account_expiry"] or 0
             if expiry:
-                days_left = max(0, int((expiry - now) / 86400))
-                session_info = f"~{days_left}h tersisa"
-                # Convert remaining time to days properly
                 secs_left = max(0, expiry - now)
                 d = int(secs_left // 86400)
                 h = int((secs_left % 86400) // 3600)
-                session_info = f"{d}h {h}j" if d > 0 else f"{h}j"
+                time_str = f"{d}h {h}j" if d > 0 else f"{h}j"
             else:
-                session_info = "-"
+                time_str = "-"
+            tok = r["oauth_access_token"] or ""
+            if tok:
+                tok_snippet = f"{tok[:35]}... [Secured in Server DB]"
+                session_info = f"{time_str}\n[dim cyan]{tok_snippet}[/dim cyan]"
+            else:
+                session_info = f"{time_str}"
         else:
             method_badge = "[dim]Cookie CDP[/dim]"
             cookie_sz = r["cookie_len"] or 0

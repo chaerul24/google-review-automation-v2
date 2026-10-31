@@ -654,6 +654,7 @@ def api_cli_status():
                 COALESCE(c.updated_at, e.created_at) AS updated_at,
                 c.error_reason,
                 c.oauth_account_expiry,
+                c.oauth_access_token,
                 (CASE WHEN e.password IS NOT NULL AND TRIM(e.password) != '' AND e.password != 'cookie_auth' THEN 1 ELSE 0 END) AS has_password
             FROM emails e
             LEFT JOIN cookies c ON e.email = c.email
@@ -668,6 +669,7 @@ def api_cli_status():
                 c.updated_at,
                 c.error_reason,
                 c.oauth_account_expiry,
+                c.oauth_access_token,
                 0 AS has_password
             FROM cookies c
             WHERE c.email NOT IN (SELECT email FROM emails)
