@@ -483,10 +483,17 @@ CLI_VERSIONS = [
         "title": "Anti-Logout Guard, Auto-Relogin Engine & Cookie Status Fix",
         "description": "Perlindungan anti-logout akun Google, mesin auto-relogin untuk akun berpassword, badge status 🔑 SIAP (Auto-Login) di tabel cookie, dan perbaikan reset status cookie saat paste ulang.",
     },
+    {
+        "version": "v1.1.0",
+        "version_code": 110,
+        "release_date": "2026-10-31",
+        "title": "Migrasi Penuh Google OAuth 2.0 (30 Hari) & Zero-Dependency CLI",
+        "description": "Dukungan penuh Google OAuth 2.0 resmi dengan masa berlaku 30 hari, auto-refresh token, visualisasi metode OAuth vs Cookie di tabel, opsi tautkan akun via browser, dan kompatibilitas penuh Termux Android & Windows tanpa dependensi tambahan.",
+    },
 ]
 
-LATEST_CLI_VERSION = "v1.0.7"
-LATEST_CLI_VERSION_CODE = 107
+LATEST_CLI_VERSION = "v1.1.0"
+LATEST_CLI_VERSION_CODE = 110
 
 
 @app.route("/api/cli/version", methods=["GET"])
@@ -626,6 +633,7 @@ def api_cli_status():
     with db.get_db() as conn:
         accounts = conn.execute("""
             SELECT e.id, e.email, COALESCE(e.account_name, c.account_name, '') AS account_name, e.flagged, c.status AS cookie_status,
+                   COALESCE(c.auth_method, 'cookie') AS auth_method,
                    (CASE WHEN e.password IS NOT NULL AND TRIM(e.password) != '' AND e.password != 'cookie_auth' THEN 1 ELSE 0 END) AS has_password
             FROM emails e
             LEFT JOIN cookies c ON e.email = c.email
@@ -636,13 +644,16 @@ def api_cli_status():
                 COALESCE(c.id, e.id) AS id,
                 e.email,
                 COALESCE(c.account_name, e.account_name, '') AS account_name,
+                COALESCE(c.auth_method, 'cookie') AS auth_method,
                 CASE 
+                    WHEN c.auth_method = 'oauth' THEN c.status
                     WHEN c.cookie_json IS NULL OR c.cookie_json = '' THEN 'no_cookie'
                     ELSE c.status 
                 END AS status,
                 c.last_checked_at,
                 COALESCE(c.updated_at, e.created_at) AS updated_at,
                 c.error_reason,
+                c.oauth_account_expiry,
                 (CASE WHEN e.password IS NOT NULL AND TRIM(e.password) != '' AND e.password != 'cookie_auth' THEN 1 ELSE 0 END) AS has_password
             FROM emails e
             LEFT JOIN cookies c ON e.email = c.email
@@ -651,10 +662,12 @@ def api_cli_status():
                 c.id,
                 c.email,
                 COALESCE(c.account_name, '') AS account_name,
+                COALESCE(c.auth_method, 'cookie') AS auth_method,
                 c.status,
                 c.last_checked_at,
                 c.updated_at,
                 c.error_reason,
+                c.oauth_account_expiry,
                 0 AS has_password
             FROM cookies c
             WHERE c.email NOT IN (SELECT email FROM emails)
@@ -676,6 +689,7 @@ def api_cli_status():
         "businesses_count": len(businesses),
         "accounts_count": len(accounts),
         "active_cookies": sum(1 for a in accounts if a["cookie_status"] == "active"),
+        "oauth_count": sum(1 for c in cookies_list if c["auth_method"] == "oauth"),
         "reviewed_count": rev_count,
         "pending_count": pending_count,
         "businesses": [dict(b) for b in businesses],

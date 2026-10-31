@@ -28,8 +28,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 # Version Tracking & Manifest
-CLI_VERSION = "v1.0.7"
-CLI_VERSION_CODE = 107
+CLI_VERSION = "v1.1.0"
+CLI_VERSION_CODE = 110
 
 # Enable ANSI colors on Windows cmd.exe
 if sys.platform == "win32":
@@ -52,7 +52,7 @@ C_MAGENTA = "\033[95m"
 C_CYAN = "\033[96m"
 C_WHITE = "\033[97m"
 
-DEFAULT_SERVER = os.environ.get("BOT_SERVER", "http://192.168.1.17:5000")
+DEFAULT_SERVER = os.environ.get("BOT_SERVER", "https://autobotix.my.id")
 DEFAULT_API_KEY = os.environ.get("BOT_KEY", "")
 
 
@@ -636,16 +636,17 @@ def print_header_screen(client: Optional[ServerClient] = None, title: Optional[s
             b_cnt = status_info.get("businesses_count", 0)
             a_cnt = status_info.get("accounts_count", 0)
             c_cnt = status_info.get("active_cookies", 0)
+            o_cnt = status_info.get("oauth_count", 0)
             r_cnt = status_info.get("reviewed_count", 0)
             p_cnt = status_info.get("pending_count", 0)
             disps = " ".join(status_info.get("displays", []))
             if cols >= 68:
-                lines.append(f"Target: {C_WHITE}{b_cnt}{C_RESET} │ Akun: {C_WHITE}{a_cnt}{C_RESET} │ Cookie: {C_WHITE}{c_cnt}{C_RESET} │ Ulasan: {C_WHITE}{r_cnt}{C_RESET} │ Antrean: {C_WHITE}{p_cnt}{C_RESET}")
+                lines.append(f"Target: {C_WHITE}{b_cnt}{C_RESET} │ Akun: {C_WHITE}{a_cnt}{C_RESET} │ Aktif: {C_GREEN}{c_cnt}{C_RESET} │ OAuth: {C_BLUE}{o_cnt}{C_RESET} │ Ulasan: {C_WHITE}{r_cnt}{C_RESET} │ Antrean: {C_WHITE}{p_cnt}{C_RESET}")
                 if disps:
                     lines.append(f"{C_DIM}Display Virtual Xvfb:{C_RESET} {C_CYAN}{disps}{C_RESET}")
             else:
-                lines.append(f"Target: {C_WHITE}{b_cnt}{C_RESET} │ Akun: {C_WHITE}{a_cnt}{C_RESET} │ Cookie: {C_WHITE}{c_cnt}{C_RESET}")
-                lines.append(f"Ulasan: {C_WHITE}{r_cnt}{C_RESET} │ Antrean: {C_WHITE}{p_cnt}{C_RESET}")
+                lines.append(f"Target: {C_WHITE}{b_cnt}{C_RESET} │ Akun: {C_WHITE}{a_cnt}{C_RESET} │ Aktif: {C_GREEN}{c_cnt}{C_RESET}")
+                lines.append(f"OAuth: {C_BLUE}{o_cnt}{C_RESET} │ Ulasan: {C_WHITE}{r_cnt}{C_RESET} │ Antrean: {C_WHITE}{p_cnt}{C_RESET}")
         print_box(lines, width=min(cols - 4, 68))
 
     if title:
@@ -1030,7 +1031,7 @@ def print_businesses(businesses: List[Dict[str, Any]]):
 
 def print_accounts(accounts: List[Dict[str, Any]]):
     print()
-    box_header(f"{C_BOLD}{C_CYAN}STATUS AKUN & SESI COOKIE GOOGLE{C_RESET}")
+    box_header(f"{C_BOLD}{C_CYAN}DAFTAR AKUN GOOGLE{C_RESET}")
     if not accounts:
         print(f"  {C_YELLOW}Belum ada akun Google terdaftar.{C_RESET}")
         return
@@ -1082,19 +1083,28 @@ def print_accounts(accounts: List[Dict[str, Any]]):
 
 def print_cookies_table(cookies: List[Dict[str, Any]]):
     print()
-    box_header(f"{C_BOLD}{C_CYAN}STATUS SESI & DAFTAR COOKIE GOOGLE{C_RESET}")
+    box_header(f"{C_BOLD}{C_CYAN}STATUS SESI & DAFTAR AKUN GOOGLE (OAuth & Cookie){C_RESET}")
     if not cookies:
-        print(f"  {C_YELLOW}Belum ada cookie Google terdaftar di database.{C_RESET}")
+        print(f"  {C_YELLOW}Belum ada akun Google terdaftar di database.{C_RESET}")
         return
 
     cols = get_terminal_width()
+    import time as _t
+    now = _t.time()
+
     if cols < 70:
         for c in cookies:
             cid = c.get("id")
             name = (c.get("account_name") or "-").strip()
             email = c.get("email", "")
             c_status = (c.get("status") or "unknown").lower()
+            auth_method = c.get("auth_method") or "cookie"
             has_pwd = bool(c.get("has_password"))
+
+            if auth_method == "oauth":
+                method_tag = f"{C_BLUE}OAuth{C_RESET}"
+            else:
+                method_tag = f"{C_DIM}Cookie{C_RESET}"
 
             if c_status == "active":
                 st_badge = f"{C_GREEN}● AKTIF{C_RESET}"
@@ -1103,28 +1113,36 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
             elif c_status in ("expired", "revoked", "invalid"):
                 st_badge = f"{C_RED}✖ KEDALUWARSA{C_RESET}"
             elif c_status == "needs_login":
-                st_badge = f"{C_YELLOW}▲ PERLU LOGIN (No Pass){C_RESET}"
+                st_badge = f"{C_YELLOW}▲ PERLU LOGIN{C_RESET}"
             elif c_status in ("no_cookie", "none", "missing"):
-                st_badge = f"{C_MAGENTA}○ BELUM ADA COOKIE{C_RESET}"
+                st_badge = f"{C_MAGENTA}○ BELUM ADA SESI{C_RESET}"
             else:
                 st_badge = f"{C_DIM}- TIDAK AKTIF -{C_RESET}"
-            line1 = f" {C_YELLOW}[#{cid}]{C_RESET} {C_WHITE}{C_BOLD}{name}{C_RESET} ──> {st_badge}"
+            line1 = f" {C_YELLOW}[#{cid}]{C_RESET} [{method_tag}] {C_WHITE}{C_BOLD}{name}{C_RESET} ──> {st_badge}"
             line2 = f"       {C_CYAN}{email}{C_RESET}"
             print(truncate_ansi(line1, cols - 1))
             print(truncate_ansi(line2, cols - 1))
         print()
         return
 
-    print(f" {C_BOLD}{'ID':<5} {'NAMA AKUN GOOGLE':<24} {'EMAIL AKUN':<32} {'STATUS SESI':<20}{C_RESET}")
-    print(" " + "─" * min(82, cols - 2))
+    print(f" {C_BOLD}{'ID':<5} {'NAMA AKUN GOOGLE':<22} {'EMAIL AKUN':<30} {'METODE':<10} {'STATUS SESI':<20}{C_RESET}")
+    print(" " + "─" * min(90, cols - 2))
     has_no_cookie = False
     has_auto_login = False
     for c in cookies:
         cid = c.get("id")
-        name = (c.get("account_name") or "-").strip()[:22]
-        email = c.get("email", "")[:30]
+        name = (c.get("account_name") or "-").strip()[:20]
+        email = c.get("email", "")[:28]
         c_status = (c.get("status") or "unknown").lower()
+        auth_method = c.get("auth_method") or "cookie"
         has_pwd = bool(c.get("has_password"))
+
+        if auth_method == "oauth":
+            method_color = f"{C_BLUE}OAuth 2.0{C_RESET}"
+            method_pad = pad_to_display_width(method_color, 10)
+        else:
+            method_color = f"{C_DIM}Cookie{C_RESET}"
+            method_pad = pad_to_display_width(method_color, 10)
 
         if c_status == "active":
             st_color = f"{C_GREEN}● AKTIF{C_RESET}"
@@ -1134,23 +1152,23 @@ def print_cookies_table(cookies: List[Dict[str, Any]]):
         elif c_status in ("expired", "revoked", "invalid"):
             st_color = f"{C_RED}✖ KEDALUWARSA{C_RESET}"
         elif c_status == "needs_login":
-            st_color = f"{C_YELLOW}▲ PERLU LOGIN (No Pass){C_RESET}"
+            st_color = f"{C_YELLOW}▲ PERLU LOGIN{C_RESET}"
         elif c_status in ("no_cookie", "none", "missing"):
-            st_color = f"{C_MAGENTA}○ BELUM ADA COOKIE{C_RESET}"
+            st_color = f"{C_MAGENTA}○ BELUM ADA SESI{C_RESET}"
             has_no_cookie = True
         else:
             st_color = f"{C_DIM}- TIDAK AKTIF -{C_RESET}"
 
         st_pad = pad_to_display_width(st_color, 20)
-        row = f" {C_YELLOW}{cid:<5}{C_RESET} {C_WHITE}{name:<24}{C_RESET} {C_CYAN}{email:<32}{C_RESET} {st_pad}"
+        row = f" {C_YELLOW}{cid:<5}{C_RESET} {C_WHITE}{name:<22}{C_RESET} {C_CYAN}{email:<30}{C_RESET} {method_pad} {st_pad}"
         print(truncate_ansi(row, cols - 1))
     print()
     if has_auto_login:
         print(f" {C_BOLD}{C_GREEN}🛡️  ANTI-LOGOUT GUARD AKTIF:{C_RESET} {C_WHITE}Bot dilindungi mutlak dari aksi logout Google.{C_RESET}")
         print(f" {C_DIM}    Akun berstatus '{C_CYAN}🔑 SIAP (Auto-Login){C_DIM}' memiliki password tersimpan; bot otomatis login ulang saat task jalan.{C_RESET}\n")
     elif has_no_cookie:
-        print(f" {C_DIM}💡 Tips: Akun berstatus '{C_MAGENTA}○ BELUM ADA COOKIE{C_DIM}' baru didaftarkan lewat email/password.{C_RESET}")
-        print(f" {C_DIM}         Gunakan opsi [5] Auto-Relogin atau masukkan Cookie JSON melalui opsi [1].{C_RESET}\n")
+        print(f" {C_DIM}💡 Tips: Akun berstatus '{C_MAGENTA}○ BELUM ADA SESI{C_DIM}' belum terautentikasi.{C_RESET}")
+        print(f" {C_DIM}         Hubungkan akun via OAuth di dashboard atau masukkan Cookie JSON melalui opsi [1].{C_RESET}\n")
 
 
 def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
@@ -1164,26 +1182,27 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
             pass
 
     while True:
-        print_header_screen(client, title="STATUS & KELOLA COOKIE GOOGLE")
+        print_header_screen(client, title="STATUS & KELOLA AKUN GOOGLE (OAuth & Cookie)")
         print_cookies_table(cookies)
 
         if not client.is_admin:
-            print(f" {C_DIM}ℹ️  Anda masuk sebagai akun biasa ({client.username}). Fitur tambah & hapus cookie hanya untuk Administrator.{C_RESET}")
+            print(f" {C_DIM}ℹ️  Anda masuk sebagai akun biasa ({client.username}). Fitur tambah & hapus akun/cookie hanya untuk Administrator.{C_RESET}")
             input(f"\n {C_DIM}Tekan Enter untuk kembali ke menu utama...{C_RESET}")
             break
 
         # Admin Actions Menu
-        print(f" {C_BOLD}{C_CYAN}─── KELOLA COOKIE (AKUN ADMIN) ────────────────────────────────────────{C_RESET}")
+        print(f" {C_BOLD}{C_CYAN}─── KELOLA AKUN & SESI (ADMIN) ────────────────────────────────────────{C_RESET}")
         print(f"  {C_YELLOW}[1]{C_RESET} {C_WHITE}➕ Tambah Cookie Baru (Paste JSON atau File .json){C_RESET}")
-        print(f"  {C_YELLOW}[2]{C_RESET} {C_WHITE}🗑️  Hapus Cookie (Berdasarkan ID atau Email){C_RESET}")
-        print(f"  {C_YELLOW}[3]{C_RESET} {C_WHITE}🔍 Cek Nama Akun & Status Sesi (Live Check Google){C_RESET}")
+        print(f"  {C_YELLOW}[2]{C_RESET} {C_WHITE}🗑️  Hapus Akun / Cookie (Berdasarkan ID atau Email){C_RESET}")
+        print(f"  {C_YELLOW}[3]{C_RESET} {C_WHITE}🔍 Cek Nama Akun & Status Sesi (Live Check Google OAuth/Cookie){C_RESET}")
         print(f"  {C_YELLOW}[4]{C_RESET} {C_WHITE}🔄 Uji Validitas Sesi Seluruh Akun (Live Batch Test & Auto-Refresh){C_RESET}")
         print(f"  {C_YELLOW}[5]{C_RESET} {C_BOLD}{C_CYAN}🔑 Auto-Relogin Akun Google (Login Otomatis Akun Perlu Login){C_RESET}")
+        print(f"  {C_YELLOW}[6]{C_RESET} {C_BOLD}{C_GREEN}🌐 Link Hubungkan Akun via Google OAuth 2.0 (Browser Login){C_RESET}")
         print(f"  {C_YELLOW}[0]{C_RESET} {C_DIM}↩️  Kembali ke Menu Utama{C_RESET}")
         print()
 
         try:
-            c_opt = input(f" {C_GREEN}Pilih aksi cookie [0-5] (default 0): {C_RESET}").strip() or "0"
+            c_opt = input(f" {C_GREEN}Pilih aksi [0-6] (default 0): {C_RESET}").strip() or "0"
         except (KeyboardInterrupt, EOFError):
             break
 
@@ -1442,7 +1461,24 @@ def handle_cookie_menu(client: ServerClient, status_info: Dict[str, Any]):
             except Exception:
                 pass
 
-            input(f"\n {C_DIM}Tekan Enter untuk kembali ke tabel cookie...{C_RESET}")
+            input(f"\n {C_DIM}Tekan Enter untuk kembali ke tabel akun...{C_RESET}")
+
+        elif c_opt == "6":
+            oauth_url = f"{client.base_url}/auth/google"
+            print_header_screen(client, title="HUBUNGI GOOGLE OAUTH 2.0")
+            print(f" {C_BOLD}{C_CYAN}Koneksi Akun Google via OAuth 2.0 Resmi{C_RESET}")
+            print(f" {C_WHITE}Buka URL berikut di browser HP / Laptop Anda untuk menghubungkan akun Google:{C_RESET}\n")
+            print(f"   {C_BOLD}{C_GREEN}👉 {oauth_url}{C_RESET}\n")
+            print(f" {C_DIM}Kelebihan OAuth 2.0:{C_RESET}")
+            print(f"  {C_GREEN}✓{C_RESET} {C_WHITE}Masa berlaku token sesi 30 hari otomatis (tanpa perlu repot export cookie JSON).{C_RESET}")
+            print(f"  {C_GREEN}✓{C_RESET} {C_WHITE}Auto-refresh access token via Google API saat task dijalankan.{C_RESET}")
+            print(f"  {C_GREEN}✓{C_RESET} {C_WHITE}Setelah login di browser Google, akun langsung muncul aktif di CLI.{C_RESET}\n")
+            input(f" {C_DIM}Tekan Enter untuk menyegarkan data akun...{C_RESET}")
+            try:
+                cur_status = client.get_status()
+                cookies = cur_status.get("cookies", [])
+            except Exception:
+                pass
 
 
 # ── Queue & Antrean Handler ───────────────────────────────────────────────────
@@ -2369,10 +2405,15 @@ def interactive_menu(client: ServerClient):
             print(f"\n {C_RED}✖ Gagal menghubungi server {client.base_url}: {e}{C_RESET}")
             print(f" Pastikan server AutoBotix aktif di jaringan (IP: {client.base_url}).")
             try:
-                retry = input(f"\n [1] Coba Lagi  [2] Ganti Login  [0] Keluar: ").strip()
+                retry = input(f"\n [1] Coba Lagi  [2] Ganti Login  [3] Ganti URL Server  [0] Keluar: ").strip()
                 if retry == "2":
                     client.api_key = ""
                     prompt_login(client)
+                    continue
+                elif retry == "3":
+                    new_srv = input(f" Masukkan URL Server baru (cth: https://autobotix.my.id atau http://192.168.1.17:5000): ").strip()
+                    if new_srv:
+                        client.base_url = new_srv.rstrip("/")
                     continue
                 elif retry == "0":
                     break
@@ -2384,9 +2425,9 @@ def interactive_menu(client: ServerClient):
         print_banner(client, status_info)
 
         cookie_menu_label = (
-            f" {C_YELLOW}[4]{C_RESET}  {C_WHITE}🍪  KELOLA COOKIE (ADMIN){C_RESET}   {C_DIM}Status, Tambah & Hapus Cookie Sesi{C_RESET}"
+            f" {C_YELLOW}[4]{C_RESET}  {C_WHITE}🔑  KELOLA AKUN & SESI (ADMIN){C_RESET}   {C_DIM}Status, OAuth & Cookie Sesi{C_RESET}"
             if client.is_admin else
-            f" {C_YELLOW}[4]{C_RESET}  {C_WHITE}🍪  STATUS COOKIE{C_RESET}        {C_DIM}Cek validitas akun Google & sesi CDP{C_RESET}"
+            f" {C_YELLOW}[4]{C_RESET}  {C_WHITE}🔑  STATUS AKUN & SESI{C_RESET}        {C_DIM}Cek validitas akun Google (OAuth / CDP){C_RESET}"
         )
 
         menu_lines = [
@@ -2456,8 +2497,12 @@ def interactive_menu(client: ServerClient):
                 else:
                     lbl = f"{C_CYAN}{email}{C_RESET}"
 
+                auth_m = a.get("auth_method") or "cookie"
                 if c_st == "active":
-                    badge = f"{C_GREEN}● AKTIF (Cookie){C_RESET} {C_DIM}[Siap Jalan]{C_RESET}"
+                    if auth_m == "oauth":
+                        badge = f"{C_GREEN}● AKTIF (OAuth 2.0){C_RESET} {C_DIM}[Siap Jalan]{C_RESET}"
+                    else:
+                        badge = f"{C_GREEN}● AKTIF (Cookie){C_RESET} {C_DIM}[Siap Jalan]{C_RESET}"
                 elif has_pwd:
                     badge = f"{C_CYAN}🔑 SIAP (Login Email/Pass){C_RESET} {C_DIM}[Auto-Login]{C_RESET}"
                 elif c_st == "needs_login":
@@ -2465,7 +2510,7 @@ def interactive_menu(client: ServerClient):
                 elif c_st == "expired":
                     badge = f"{C_RED}✖ KEDALUWARSA{C_RESET} {C_DIM}[Dilewati]{C_RESET}"
                 else:
-                    badge = f"{C_DIM}- BELUM SIAP (No Cookie/Pass) - [Dilewati]{C_RESET}"
+                    badge = f"{C_DIM}- BELUM SIAP (No Sesi/Pass) - [Dilewati]{C_RESET}"
 
                 print(f" {C_CYAN}│   {branch}{C_RESET} [Akun {idx}] {lbl} ────> {badge}")
                 time.sleep(0.02)
@@ -2476,14 +2521,17 @@ def interactive_menu(client: ServerClient):
 
             print(f" {C_CYAN}│{C_RESET}")
             if not usable_accs:
-                print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_RED}✖ Tidak dapat menjalankan task: Tidak ada akun dengan Cookie Aktif atau Password.{C_RESET}")
-                print(f"     {C_YELLOW}Daftarkan Cookie JSON di menu [4] atau tambahkan Email & Password akun di web dashboard.{C_RESET}")
+                print(f" {C_CYAN}└──{C_RESET} {C_BOLD}{C_RED}✖ Tidak dapat menjalankan task: Tidak ada akun dengan Sesi Aktif (OAuth/Cookie) atau Password.{C_RESET}")
+                print(f"     {C_YELLOW}Hubungkan Google OAuth di dashboard atau tambahkan Email & Password akun.{C_RESET}")
                 input(f"\n {C_DIM}Tekan Enter untuk kembali...{C_RESET}")
                 continue
 
-            cookie_cnt = sum(1 for a in usable_accs if a.get("cookie_status") == "active")
+            oauth_cnt = sum(1 for a in usable_accs if a.get("cookie_status") == "active" and a.get("auth_method") == "oauth")
+            cookie_cnt = sum(1 for a in usable_accs if a.get("cookie_status") == "active" and a.get("auth_method") != "oauth")
             cred_cnt = sum(1 for a in usable_accs if a.get("cookie_status") != "active" and a.get("has_password"))
             desc_parts = []
+            if oauth_cnt:
+                desc_parts.append(f"{oauth_cnt} via OAuth 2.0")
             if cookie_cnt:
                 desc_parts.append(f"{cookie_cnt} via Cookie")
             if cred_cnt:

@@ -602,6 +602,190 @@ def auto_login_single_account(email: str, password: str, totp_secret: str = None
         lock.release()
 
 
+_REVIEW_TEXTAREA_SELECTORS = (
+    'textarea[aria-label="Enter review"]',
+    'textarea[jsname="YPqjbf"]',
+    'textarea.VfPpkd-fmcmS-wGMbrd',
+    'textarea[placeholder*="Share details of your own experience"]',
+)
+
+_REVIEW_TEXTAREA_JS = r"""
+(() => {
+  const selectors = [
+    'textarea[aria-label="Enter review"]',
+    'textarea[jsname="YPqjbf"]',
+    'textarea.VfPpkd-fmcmS-wGMbrd',
+    'textarea[placeholder*="Share details of your own experience"]'
+  ];
+  function findIn(root) {
+    if (!root || !root.querySelector) return null;
+    for (const sel of selectors) {
+      const hit = root.querySelector(sel);
+      if (hit) return hit;
+    }
+    const all = root.querySelectorAll('*');
+    for (const el of all) {
+      if (el.shadowRoot) {
+        const inner = findIn(el.shadowRoot);
+        if (inner) return inner;
+      }
+    }
+    const frames = root.querySelectorAll('iframe');
+    for (const frame of frames) {
+      try {
+        const doc = frame.contentDocument;
+        if (doc) {
+          const inner = findIn(doc);
+          if (inner) return inner;
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+  const iframe = document.querySelector("iframe[name='goog-reviews-write-widget']");
+  let doc = null;
+  try {
+    doc = iframe && (iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document));
+  } catch (e) {}
+  if (doc) {
+    const inFrame = findIn(doc);
+    if (inFrame) return inFrame;
+  }
+  return findIn(document);
+})()
+"""
+
+
+def _node_attributes(node):
+    raw = getattr(node, "attributes", None) or []
+    return {raw[i]: raw[i + 1] for i in range(0, len(raw) - 1, 2)}
+
+
+def _textarea_match_rank(node):
+    """Lower rank is a closer match. None means this node is not the review field."""
+    if (getattr(node, "node_name", "") or "").upper() != "TEXTAREA":
+        return None
+    attrs = _node_attributes(node)
+    if attrs.get("aria-label") == "Enter review":
+        return 0
+    if attrs.get("jsname") == "YPqjbf":
+        return 1
+    if "VfPpkd-fmcmS-wGMbrd" in (attrs.get("class") or "").split():
+        return 2
+    if "Share details of your own experience" in (attrs.get("placeholder") or ""):
+        return 3
+    return None
+
+
+def _iter_dom_nodes(node, seen):
+    if node is None or id(node) in seen:
+        return
+    seen.add(id(node))
+    yield node
+    for shadow in getattr(node, "shadow_roots", None) or []:
+        yield from _iter_dom_nodes(shadow, seen)
+    content = getattr(node, "content_document", None)
+    if content is not None:
+        yield from _iter_dom_nodes(content, seen)
+    for child in getattr(node, "children", None) or []:
+        yield from _iter_dom_nodes(child, seen)
+
+
+def _best_textarea_node(root):
+    best = None
+    best_rank = 99
+    for node in _iter_dom_nodes(root, set()):
+        rank = _textarea_match_rank(node)
+        if rank is not None and rank < best_rank:
+            best = node
+            best_rank = rank
+            if best_rank == 0:
+                break
+    return best
+
+
+def _iframe_widget_node(doc):
+    for node in _iter_dom_nodes(doc, set()):
+        if (getattr(node, "node_name", "") or "").upper() != "IFRAME":
+            continue
+        if _node_attributes(node).get("name") == "goog-reviews-write-widget":
+            return node
+    return None
+
+
+def _bind_review_field(sb, node):
+    from seleniumbase.undetected.cdp_driver.element import create
+    elem = create(node, sb.page, node)
+    return sb._CDPMethods__add_sync_methods(elem)
+
+
+def _find_review_textarea_via_js(sb):
+    """Resolve the textarea through the page JS world, including open shadow roots."""
+    try:
+        import mycdp
+        remote, errors = sb.loop.run_until_complete(
+            sb.page.send(
+                mycdp.runtime.evaluate(
+                    expression=_REVIEW_TEXTAREA_JS,
+                    return_by_value=False,
+                    user_gesture=True,
+                    allow_unsafe_eval_blocked_by_csp=True,
+                )
+            )
+        )
+        if errors or remote is None or not getattr(remote, "object_id", None):
+            return None
+        if getattr(remote, "subtype", None) == "null":
+            return None
+        node = sb.loop.run_until_complete(
+            sb.page.send(mycdp.dom.describe_node(object_id=remote.object_id))
+        )
+        if node is None:
+            return None
+        return _bind_review_field(sb, node)
+    except Exception:
+        log.debug("JS review-textarea lookup failed", exc_info=True)
+        return None
+
+
+def _find_review_textarea(sb, iframe_sel):
+    """Find the Maps review field in the widget iframe, including its shadow tree.
+
+    DOM.querySelector on the iframe document does not enter open shadow roots.
+    The Material textarea (class VfPpkd-fmcmS-wGMbrd) lives in that shadow tree.
+    """
+    for selector in _REVIEW_TEXTAREA_SELECTORS:
+        try:
+            found = sb.get_nested_element(iframe_sel, selector)
+        except Exception:
+            found = None
+        if found is not None:
+            return found
+    try:
+        import mycdp
+        doc = sb.loop.run_until_complete(
+            sb.page.send(mycdp.dom.get_document(depth=-1, pierce=True))
+        )
+    except Exception:
+        log.debug("Pierced DOM fetch failed", exc_info=True)
+        doc = None
+    if doc is not None:
+        iframe = _iframe_widget_node(doc)
+        root = None
+        if iframe is not None:
+            root = getattr(iframe, "content_document", None) or iframe
+        node = _best_textarea_node(root) if root is not None else None
+        if node is not None:
+            try:
+                bound = _bind_review_field(sb, node)
+                if bound is not None:
+                    log.info("Review textarea found inside iframe shadow tree")
+                    return bound
+            except Exception:
+                log.debug("Binding pierced review textarea failed", exc_info=True)
+    return _find_review_textarea_via_js(sb)
+
+
 def _extract_cid_from_maps_url(maps_url: str) -> int | None:
     """Extract Google Maps CID (Content ID) from a maps URL for direct review navigation."""
     # Try ftid=0xAAAA:0xBBBB pattern
@@ -1028,10 +1212,10 @@ def post_review(
         db.add_process_log(business_id, f"[{email}] Form review Google Maps sudah terbuka.", email_id)
         sb.sleep(4)  # Brief wait before polling for the textarea
 
-        # Wait for the textarea inside the iframe to become available (up to 60s)
+        # Wait until the review field is reachable, including inside an open shadow root.
         review_area = None
         for _attempt in range(24):  # 24 × 2.5s = 60s max
-            review_area = sb.get_nested_element(iframe_sel, 'textarea[aria-label="Enter review"]')
+            review_area = _find_review_textarea(sb, iframe_sel)
             if review_area is not None:
                 break
             log.debug("Waiting for review textarea (attempt %d/24)...", _attempt + 1)
@@ -1071,7 +1255,7 @@ def post_review(
 
         # Type review text into the textarea inside the iframe (skip for no_text reviews)
         if review_text:
-            review_area = sb.get_nested_element(iframe_sel, 'textarea[aria-label="Enter review"]')
+            review_area = _find_review_textarea(sb, iframe_sel)
             if review_area is None:
                 raise RuntimeError("Could not find review textarea inside iframe")
             review_area.type(review_text)
